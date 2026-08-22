@@ -30,11 +30,21 @@ export default async function ContactsPage({
 
   return (
     <div className="mx-auto max-w-[1100px]">
-      <div className="mb-6">
-        <h1 className="text-2xl font-extrabold tracking-[-0.02em]">Contacts</h1>
-        <p className="mt-1 text-sm text-dim">
-          People who have submitted an enrollment form.
-        </p>
+      <div className="mb-6 flex items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-extrabold tracking-[-0.02em]">
+            Contacts
+          </h1>
+          <p className="mt-1 text-sm text-dim">
+            People who have submitted an enrollment form.
+          </p>
+        </div>
+        <Link
+          href="/admin/contacts/new"
+          className="rounded-[8px] bg-accent px-4 py-2.5 text-sm font-semibold text-white transition-opacity hover:opacity-90"
+        >
+          New contact
+        </Link>
       </div>
 
       <form
@@ -95,10 +105,15 @@ export default async function ContactsPage({
               {contacts.map((contact) => (
                 <tr
                   key={contact.id}
-                  className="border-b border-line last:border-b-0"
+                  className="border-b border-line last:border-b-0 transition-colors hover:bg-surface"
                 >
                   <td className="px-4 py-3 font-medium text-text">
-                    {contact.name ?? '—'}
+                    <Link
+                      href={`/admin/contacts/${contact.id}`}
+                      className="transition-opacity hover:opacity-80"
+                    >
+                      {contact.name ?? 'View contact'}
+                    </Link>
                   </td>
                   <td className="px-4 py-3 tabular-nums text-dim">
                     {contact.whatsapp_number}

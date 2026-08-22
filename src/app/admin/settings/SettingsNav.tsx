@@ -3,22 +3,19 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 
-const NAV_ITEMS = [
-  { href: '/admin/products', label: 'Products' },
-  { href: '/admin/forms', label: 'Forms' },
-  { href: '/admin/leads', label: 'Leads' },
-  { href: '/admin/deals', label: 'Deals' },
-  { href: '/admin/contacts', label: 'Contacts' },
-  { href: '/admin/settings', label: 'Settings' },
-] as const
+/**
+ * Sub-navigation for the Settings section. Stages is the only entry today;
+ * later specs add more (custom fields, roles, etc.). Active-item highlighting
+ * mirrors the primary `AdminNav`.
+ */
+const SETTINGS_NAV = [{ href: '/admin/settings/stages', label: 'Stages' }] as const
 
-/** Sidebar navigation with active-section highlighting. */
-export default function AdminNav() {
+export default function SettingsNav() {
   const pathname = usePathname()
 
   return (
-    <nav className="flex flex-col gap-0.5">
-      {NAV_ITEMS.map((item) => {
+    <nav className="flex flex-wrap gap-1">
+      {SETTINGS_NAV.map((item) => {
         const active =
           pathname === item.href || pathname.startsWith(item.href + '/')
         return (
@@ -27,7 +24,7 @@ export default function AdminNav() {
             href={item.href}
             aria-current={active ? 'page' : undefined}
             className={[
-              'rounded-[8px] px-3 py-2 text-sm font-medium transition-colors',
+              'rounded-[8px] px-3 py-1.5 text-sm font-medium transition-colors',
               active
                 ? 'bg-surface2 text-text'
                 : 'text-dim hover:bg-surface hover:text-text',

@@ -60,12 +60,20 @@ export default async function DealsPage({
             Enrollment deals and their payment state.
           </p>
         </div>
-        <a
-          href={`/api/admin/export?${exportParams.toString()}`}
-          className="rounded-[8px] border border-line bg-surface px-4 py-2.5 text-sm font-semibold text-text transition-colors hover:bg-surface2"
-        >
-          Export CSV
-        </a>
+        <div className="flex items-center gap-2">
+          <a
+            href={`/api/admin/export?${exportParams.toString()}`}
+            className="rounded-[8px] border border-line bg-surface px-4 py-2.5 text-sm font-semibold text-text transition-colors hover:bg-surface2"
+          >
+            Export CSV
+          </a>
+          <Link
+            href="/admin/deals/new"
+            className="rounded-[8px] bg-accent px-4 py-2.5 text-sm font-semibold text-white transition-opacity hover:opacity-90"
+          >
+            New deal
+          </Link>
+        </div>
       </div>
 
       <form
@@ -135,6 +143,7 @@ export default async function DealsPage({
               <tr className="border-b border-line text-left">
                 <th className="px-4 py-3 font-semibold text-dim">Contact</th>
                 <th className="px-4 py-3 font-semibold text-dim">Product</th>
+                <th className="px-4 py-3 font-semibold text-dim">Stage</th>
                 <th className="px-4 py-3 text-right font-semibold text-dim">
                   Total
                 </th>
@@ -166,6 +175,7 @@ export default async function DealsPage({
                   <td className="px-4 py-3 text-dim">
                     {deal.product?.name ?? '—'}
                   </td>
+                  <td className="px-4 py-3 text-dim">{deal.stage_name ?? '—'}</td>
                   <td className="px-4 py-3 text-right tabular-nums text-text">
                     {formatMoney(deal.total_amount)}
                   </td>

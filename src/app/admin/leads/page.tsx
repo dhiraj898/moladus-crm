@@ -61,12 +61,20 @@ export default async function LeadsPage({
             Every enrollment submission, newest first.
           </p>
         </div>
-        <a
-          href={`/api/admin/export?${exportParams.toString()}`}
-          className="rounded-[8px] border border-line bg-surface px-4 py-2.5 text-sm font-semibold text-text transition-colors hover:bg-surface2"
-        >
-          Export CSV
-        </a>
+        <div className="flex items-center gap-3">
+          <a
+            href={`/api/admin/export?${exportParams.toString()}`}
+            className="rounded-[8px] border border-line bg-surface px-4 py-2.5 text-sm font-semibold text-text transition-colors hover:bg-surface2"
+          >
+            Export CSV
+          </a>
+          <Link
+            href="/admin/leads/new"
+            className="rounded-[8px] bg-accent px-4 py-2.5 text-sm font-semibold text-white transition-opacity hover:opacity-90"
+          >
+            New lead
+          </Link>
+        </div>
       </div>
 
       <form
@@ -140,10 +148,15 @@ export default async function LeadsPage({
               {leads.map((lead) => (
                 <tr
                   key={lead.id}
-                  className="border-b border-line last:border-b-0"
+                  className="border-b border-line last:border-b-0 transition-colors hover:bg-surface"
                 >
                   <td className="px-4 py-3 font-medium text-text">
-                    {lead.name ?? '—'}
+                    <Link
+                      href={`/admin/leads/${lead.id}`}
+                      className="transition-opacity hover:opacity-80"
+                    >
+                      {lead.name ?? 'View lead'}
+                    </Link>
                   </td>
                   <td className="px-4 py-3 text-dim">
                     <div className="tabular-nums">{lead.phone ?? '—'}</div>
