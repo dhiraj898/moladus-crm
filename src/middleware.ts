@@ -56,5 +56,9 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/admin/:path*'],
+  // Protect every admin page (`/admin/*`) AND every admin API route
+  // (`/api/admin/*`, e.g. the CSV export) so records and their PII require an
+  // authenticated session. The export route additionally re-verifies the
+  // session itself (defense in depth).
+  matcher: ['/admin/:path*', '/api/admin/:path*'],
 }
