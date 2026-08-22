@@ -33,6 +33,21 @@ export type PaymentStatus =
   | 'failed'
   | 'refunded'
 
+/** stages.type */
+export type StageType = 'open' | 'won' | 'lost'
+
+/** activities.type */
+export type ActivityType =
+  | 'note'
+  | 'stage_change'
+  | 'created'
+  | 'edited'
+  | 'payment'
+  | 'notification'
+
+/** activities.entity_type */
+export type ActivityEntity = 'lead' | 'deal' | 'contact'
+
 /** form_fields.field_type */
 export type FieldType =
   | 'short_text'
@@ -147,6 +162,7 @@ export interface Lead {
   source: string | null
   utm: Json | null
   status: string | null
+  owner_id: string | null
   raw_payload: Json
   created_at: string | null
 }
@@ -175,7 +191,9 @@ export interface Deal {
   igst: number | null
   total_amount: number
   place_of_supply: string | null
-  stage: string | null
+  stage_id: string | null
+  owner_id: string | null
+  stage_entered_at: string | null
   payment_status: PaymentStatus | null
   razorpay_payment_link_id: string | null
   razorpay_payment_link_url: string | null
@@ -202,4 +220,33 @@ export interface WebhookEvent {
   processed: boolean | null
   received_at: string | null
   processed_at: string | null
+}
+
+export interface Stage {
+  id: string
+  name: string
+  display_order: number
+  type: StageType
+  is_default: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface DealStageEvent {
+  id: string
+  deal_id: string
+  stage_id: string
+  actor_id: string | null
+  entered_at: string
+}
+
+export interface Activity {
+  id: string
+  entity_type: ActivityEntity
+  entity_id: string
+  type: ActivityType
+  actor_id: string | null
+  body: string | null
+  metadata: Record<string, unknown>
+  created_at: string
 }

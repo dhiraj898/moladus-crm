@@ -327,7 +327,17 @@ export async function POST(req: Request): Promise<Response> {
   const customerState = boundLead.state ?? ''
   const gst = computeGST(product, customerState)
 
-  // 6d. Insert Deal. The partial unique index `deals_open_dedupe` guards against
+  // 6d. Resolve the default pipeline stage. New deals enter the CRM at the
+  // default stage (`is_default`); `deals.stage_id` is nullable with no DB
+  // default, so it must be set explicitly here.
+  const { data: defaultStageRow } = await supabase
+    .from('stages')
+    .select('id')
+    .eq('is_default', true)
+    .maybeSingle()
+  const defaultStageId = (defaultStageRow as { id: string } | null)?.id ?? null
+
+  // 6e. Insert Deal. The partial unique index `deals_open_dedupe` guards against
   // a race: two concurrent submissions can both pass the step-5 check, but only
   // one open deal per (contact, product) can exist — the loser catches the
   // unique violation and returns the winner's link.
@@ -344,7 +354,8 @@ export async function POST(req: Request): Promise<Response> {
       igst: gst.igst,
       total_amount: gst.total,
       place_of_supply: boundLead.state ?? null,
-      stage: 'new',
+      stage_id: defaultStageId,
+      stage_entered_at: new Date().toISOString(),
       payment_status: 'pending',
     })
     .select('id')

@@ -161,7 +161,7 @@ export default async function DealDetailPage({
             {formatMoney(deal.total_amount, currency)}
           </Row>
           <Row label="Place of supply">{deal.place_of_supply ?? '—'}</Row>
-          <Row label="Stage">{deal.stage ?? '—'}</Row>
+          <Row label="Stage">{deal.stage_id ?? '—'}</Row>
         </Card>
 
         <Card title="Payment">
