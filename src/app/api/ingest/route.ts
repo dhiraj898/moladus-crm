@@ -84,11 +84,11 @@ function fail(error: string, status: number): NextResponse {
  * either the entry stage has no `create_payment_link` action, or it has one that
  * failed (e.g. a Razorpay outage; `runStageActions` is best-effort and never
  * throws, so the deal is left open+unlinked and resumable by a later
- * submission). NOTE: the current FormRunner (`src/app/f/[slug]/FormRunner.tsx`)
- * treats a `null` payment_link as a submit error and shows "Something went
- * wrong", so a success-without-link response is NOT yet supported end-to-end.
- * A link-less entry route (e.g. "Call Requested") therefore needs a FormRunner
- * change to show a "we'll be in touch" confirmation before it can be used.
+ * submission). The FormRunner (`src/app/f/[slug]/FormRunner.tsx`) distinguishes
+ * success-with-null-link from failure: a `{success:true, payment_link:null}`
+ * response renders a "we'll be in touch on WhatsApp" confirmation panel rather
+ * than the payment redirect, so a link-less entry route (e.g. "Call Requested")
+ * is supported end-to-end.
  */
 async function runActionsAndRespond(
   supabase: ReturnType<typeof getServiceClient>,

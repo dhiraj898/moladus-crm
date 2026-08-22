@@ -96,6 +96,7 @@ export default function FormRunner({
   const [fieldError, setFieldError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
+  const [confirmed, setConfirmed] = useState(false)
   const [captchaToken, setCaptchaToken] = useState<string | null>(null)
 
   const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null)
@@ -187,11 +188,11 @@ export default function FormRunner({
       })
       const data = (await res.json().catch(() => null)) as {
         success?: boolean
-        payment_link?: string
+        payment_link?: string | null
         error?: string
       } | null
 
-      if (!res.ok || !data?.success || !data.payment_link) {
+      if (!res.ok || !data?.success) {
         setSubmitError(
           data?.error ??
             'Something went wrong submitting your enrollment. Please try again.'
@@ -203,8 +204,15 @@ export default function FormRunner({
         }
         return
       }
-      // Success — hand off to the hosted payment link.
-      window.location.href = data.payment_link
+      if (typeof data.payment_link === 'string' && data.payment_link.length > 0) {
+        // Success — hand off to the hosted payment link.
+        window.location.href = data.payment_link
+        return
+      }
+      // Success routed to a no-payment stage (e.g. "Call Requested"): the server
+      // committed the submission but minted no link. Show a confirmation panel
+      // instead of the payment redirect.
+      setConfirmed(true)
     } catch {
       setSubmitError('Network error. Check your connection and try again.')
       setSubmitting(false)
@@ -251,6 +259,27 @@ export default function FormRunner({
   )
 
   // ---- render ----------------------------------------------------------
+  // Confirmation state: the submission succeeded but routed to a no-payment
+  // stage, so there is no hosted payment link to redirect to.
+  if (confirmed) {
+    return (
+      <div className="flex flex-1 items-center justify-center px-6 py-20">
+        <div className="w-full max-w-[520px] text-center">
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-accent">
+            Enrollment received
+          </p>
+          <h2 className="mt-4 text-2xl font-extrabold tracking-[-0.02em]">
+            Thanks — we’ve got your details
+          </h2>
+          <p className="mt-3 text-[15px] leading-[1.7] text-dim">
+            Someone from the team will be in touch shortly on WhatsApp. You can
+            safely close this page.
+          </p>
+        </div>
+      </div>
+    )
+  }
+
   if (totalVisible === 0 || !current) {
     return (
       <div className="flex flex-1 items-center justify-center px-6 py-20 text-center">
