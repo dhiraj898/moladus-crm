@@ -7,6 +7,7 @@ import type {
   NotificationLog,
   PaymentStatus,
   Product,
+  Stage,
 } from '@/lib/supabase/types'
 
 /**
@@ -194,6 +195,8 @@ export interface DealFilters {
 export type DealListItem = Deal & {
   product: { id: string; name: string } | null
   contact: { id: string; name: string | null; whatsapp_number: string } | null
+  /** Manual sales-stage name, joined from `stages` (null when unset). */
+  stage_name: string | null
 }
 
 /**
@@ -214,7 +217,7 @@ export async function listDeals(
   let query = supabase
     .from('deals')
     .select(
-      '*, product:products (id, name), contact:contacts (id, name, whatsapp_number)'
+      '*, product:products (id, name), contact:contacts (id, name, whatsapp_number), stage:stages (id, name)'
     )
     .order('created_at', { ascending: false })
     .order('id', { ascending: false })
@@ -234,7 +237,14 @@ export async function listDeals(
 
   const { data, error } = await query
   if (error) throw new Error(`Failed to list deals: ${error.message}`)
-  return (data ?? []) as unknown as DealListItem[]
+
+  type Row = Omit<DealListItem, 'stage_name'> & {
+    stage: { id: string; name: string } | null
+  }
+  return ((data ?? []) as unknown as Row[]).map((row) => {
+    const { stage, ...rest } = row
+    return { ...rest, stage_name: stage?.name ?? null }
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -282,13 +292,15 @@ export interface DealTimeline {
   lead: Lead | null
   contact: Contact | null
   product: Product | null
+  /** Current manual sales stage, joined from `stages` (null when unset). */
+  stage: Stage | null
   notifications: NotificationLog[]
 }
 
 /**
  * Load a single deal with its full timeline: originating lead, resolved
- * contact, bound product and every notification_log row, for the deal detail
- * screen. Returns `null` when the id does not resolve to a deal.
+ * contact, bound product, current stage and every notification_log row, for the
+ * deal detail screen. Returns `null` when the id does not resolve to a deal.
  */
 export async function getDealTimeline(id: string): Promise<DealTimeline | null> {
   if (!pickUuid(id)) return null
@@ -297,7 +309,7 @@ export async function getDealTimeline(id: string): Promise<DealTimeline | null> 
   const { data, error } = await supabase
     .from('deals')
     .select(
-      '*, lead:leads (*), contact:contacts (*), product:products (*), notifications:notification_log (*)'
+      '*, lead:leads (*), contact:contacts (*), product:products (*), stage:stages (*), notifications:notification_log (*)'
     )
     .eq('id', id)
     .maybeSingle()
@@ -309,10 +321,11 @@ export async function getDealTimeline(id: string): Promise<DealTimeline | null> 
     lead: Lead | null
     contact: Contact | null
     product: Product | null
+    stage: Stage | null
     notifications: NotificationLog[] | null
   }
   const row = data as unknown as Row
-  const { lead, contact, product, notifications, ...deal } = row
+  const { lead, contact, product, stage, notifications, ...deal } = row
 
   const sorted = [...(notifications ?? [])].sort((a, b) => {
     const at = a.sent_at ? new Date(a.sent_at).getTime() : 0
@@ -320,5 +333,78 @@ export async function getDealTimeline(id: string): Promise<DealTimeline | null> 
     return at - bt
   })
 
-  return { deal, lead, contact, product, notifications: sorted }
+  return { deal, lead, contact, product, stage, notifications: sorted }
+}
+
+// ---------------------------------------------------------------------------
+// Deal stage history
+// ---------------------------------------------------------------------------
+
+/** A stage transition with the stage name and actor email resolved for display. */
+export interface DealStageHistoryItem {
+  id: string
+  stage_id: string
+  stage_name: string | null
+  actor_id: string | null
+  actor_email: string | null
+  entered_at: string
+}
+
+/**
+ * Load a deal's stage-change history, newest first, with each stage name joined
+ * and each actor id resolved to an email via the Auth admin API (memoised in a
+ * small per-request cache — admins are few). A resolution failure degrades to a
+ * null email rather than failing the page.
+ */
+export async function getDealStageHistory(
+  dealId: string
+): Promise<DealStageHistoryItem[]> {
+  if (!pickUuid(dealId)) return []
+  const supabase = getServiceClient()
+
+  const { data, error } = await supabase
+    .from('deal_stage_events')
+    .select('id, stage_id, actor_id, entered_at, stage:stages (name)')
+    .eq('deal_id', dealId)
+    .order('entered_at', { ascending: false })
+
+  if (error) throw new Error(`Failed to load stage history: ${error.message}`)
+
+  type Row = {
+    id: string
+    stage_id: string
+    actor_id: string | null
+    entered_at: string
+    stage: { name: string } | null
+  }
+  const rows = (data ?? []) as unknown as Row[]
+
+  const emailCache = new Map<string, string | null>()
+  async function resolveEmail(actorId: string | null): Promise<string | null> {
+    if (!actorId) return null
+    if (emailCache.has(actorId)) return emailCache.get(actorId) ?? null
+    try {
+      const { data: userData, error: userError } =
+        await supabase.auth.admin.getUserById(actorId)
+      const email = userError ? null : (userData.user?.email ?? null)
+      emailCache.set(actorId, email)
+      return email
+    } catch {
+      emailCache.set(actorId, null)
+      return null
+    }
+  }
+
+  const items: DealStageHistoryItem[] = []
+  for (const row of rows) {
+    items.push({
+      id: row.id,
+      stage_id: row.stage_id,
+      stage_name: row.stage?.name ?? null,
+      actor_id: row.actor_id,
+      actor_email: await resolveEmail(row.actor_id),
+      entered_at: row.entered_at,
+    })
+  }
+  return items
 }

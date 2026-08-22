@@ -1,8 +1,15 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
-import { getDealTimeline } from '@/features/records/queries'
+import {
+  getDealStageHistory,
+  getDealTimeline,
+} from '@/features/records/queries'
+import { getActivityTimeline } from '@/features/crm/activities/service'
+import { listStages } from '@/features/crm/stages/queries'
 import { formatMoney } from '@/features/form-engine/estimate'
 import PaymentStatusChip from '@/features/records/PaymentStatusChip'
+import ActivityTimeline from '@/features/crm/ActivityTimeline'
+import StageControl from './StageControl'
 import type { NotificationLog } from '@/lib/supabase/types'
 
 /**
@@ -92,6 +99,12 @@ export default async function DealDetailPage({
   const { deal, lead, contact, product, notifications } = timeline
   const currency = product?.currency ?? 'INR'
 
+  const [stages, stageHistory, activity] = await Promise.all([
+    listStages(),
+    getDealStageHistory(deal.id),
+    getActivityTimeline('deal', deal.id),
+  ])
+
   return (
     <div className="mx-auto max-w-[820px]">
       <div className="mb-6">
@@ -110,7 +123,15 @@ export default async function DealDetailPage({
               {contact?.name ?? lead?.name ?? 'Unknown customer'}
             </p>
           </div>
-          <PaymentStatusChip status={deal.payment_status} />
+          <div className="flex items-center gap-3">
+            <PaymentStatusChip status={deal.payment_status} />
+            <Link
+              href={`/admin/deals/${deal.id}/edit`}
+              className="rounded-[8px] border border-line bg-surface px-4 py-2 text-sm font-semibold text-text transition-colors hover:bg-surface2"
+            >
+              Edit
+            </Link>
+          </div>
         </div>
       </div>
 
@@ -161,7 +182,16 @@ export default async function DealDetailPage({
             {formatMoney(deal.total_amount, currency)}
           </Row>
           <Row label="Place of supply">{deal.place_of_supply ?? '—'}</Row>
-          <Row label="Stage">{deal.stage_id ?? '—'}</Row>
+          <div className="flex items-center justify-between gap-4 border-b border-line py-2.5 last:border-b-0">
+            <dt className="text-sm text-dim">Stage</dt>
+            <dd>
+              <StageControl
+                dealId={deal.id}
+                currentStageId={deal.stage_id}
+                stages={stages}
+              />
+            </dd>
+          </div>
         </Card>
 
         <Card title="Payment">
@@ -225,6 +255,40 @@ export default async function DealDetailPage({
             ))}
           </ul>
         )}
+      </section>
+
+      <section className="mt-4 rounded-[12px] border border-line bg-surface p-5">
+        <h2 className="mb-3 text-xs font-semibold uppercase tracking-[0.12em] text-dim">
+          Stage history
+        </h2>
+        {stageHistory.length === 0 ? (
+          <p className="text-sm text-dim">No stage changes recorded yet.</p>
+        ) : (
+          <ul className="flex flex-col gap-2">
+            {stageHistory.map((event) => (
+              <li
+                key={event.id}
+                className="flex items-center justify-between gap-4 border-b border-line py-2 last:border-b-0"
+              >
+                <div>
+                  <div className="text-sm font-medium text-text">
+                    {event.stage_name ?? '—'}
+                  </div>
+                  <div className="text-xs text-faint">
+                    {event.actor_email ?? 'System'}
+                  </div>
+                </div>
+                <span className="tabular-nums text-xs text-dim">
+                  {formatDateTime(event.entered_at)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section className="mt-4 rounded-[12px] border border-line bg-surface p-5">
+        <ActivityTimeline entityType="deal" entityId={deal.id} items={activity} />
       </section>
     </div>
   )
