@@ -9,7 +9,11 @@ import { listStages } from '@/features/crm/stages/queries'
 import { formatMoney } from '@/features/form-engine/estimate'
 import PaymentStatusChip from '@/features/records/PaymentStatusChip'
 import ActivityTimeline from '@/features/crm/ActivityTimeline'
+import { requireModuleView } from '@/features/rbac/guard'
+import { can } from '@/features/rbac/can'
+import { listAssignableUsers } from '@/features/rbac/queries'
 import StageControl from './StageControl'
+import AssignControl from './AssignControl'
 import type { NotificationLog } from '@/lib/supabase/types'
 
 /**
@@ -92,8 +96,9 @@ export default async function DealDetailPage({
 }: {
   params: Promise<{ id: string }>
 }) {
+  const ctx = await requireModuleView('deals')
   const { id } = await params
-  const timeline = await getDealTimeline(id)
+  const timeline = await getDealTimeline(id, ctx)
   if (!timeline) notFound()
 
   const { deal, lead, contact, product, notifications } = timeline
@@ -104,6 +109,10 @@ export default async function DealDetailPage({
     getDealStageHistory(deal.id),
     getActivityTimeline('deal', deal.id),
   ])
+
+  // Manual reassignment is offered only to roles that can edit deals.
+  const canEdit = can(ctx.permissions, 'deals', 'edit')
+  const assignableUsers = canEdit ? await listAssignableUsers() : []
 
   return (
     <div className="mx-auto max-w-[820px]">
@@ -192,6 +201,18 @@ export default async function DealDetailPage({
               />
             </dd>
           </div>
+          {canEdit ? (
+            <div className="flex items-center justify-between gap-4 border-b border-line py-2.5 last:border-b-0">
+              <dt className="text-sm text-dim">Assign</dt>
+              <dd>
+                <AssignControl
+                  dealId={deal.id}
+                  currentOwnerId={deal.owner_id}
+                  users={assignableUsers}
+                />
+              </dd>
+            </div>
+          ) : null}
         </Card>
 
         <Card title="Payment">

@@ -4,20 +4,34 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 
 /**
- * Sub-navigation for the Settings section. Active-item highlighting mirrors the
- * primary `AdminNav`. Later specs add more entries (custom fields, roles, etc.).
+ * Settings sub-nav (plan Task 6.2). Stages / Roles / Users require
+ * `settings.view`; Automation requires `automation.view`. The `allowed` map is
+ * computed server-side in `SettingsLayout` from the resolved permissions and
+ * active-item highlighting mirrors the primary `AdminNav`.
  */
-const SETTINGS_NAV = [
-  { href: '/admin/settings/stages', label: 'Stages' },
-  { href: '/admin/settings/automation', label: 'Automation' },
-] as const
+const SETTINGS_NAV: {
+  href: string
+  label: string
+  need: 'settings' | 'automation'
+}[] = [
+  { href: '/admin/settings/stages', label: 'Stages', need: 'settings' },
+  { href: '/admin/settings/roles', label: 'Roles', need: 'settings' },
+  { href: '/admin/settings/users', label: 'Users', need: 'settings' },
+  { href: '/admin/settings/automation', label: 'Automation', need: 'automation' },
+]
 
-export default function SettingsNav() {
+export default function SettingsNav({
+  allowed,
+}: {
+  allowed: { settings: boolean; automation: boolean }
+}) {
   const pathname = usePathname()
+
+  const items = SETTINGS_NAV.filter((item) => allowed[item.need])
 
   return (
     <nav className="flex flex-wrap gap-1">
-      {SETTINGS_NAV.map((item) => {
+      {items.map((item) => {
         const active =
           pathname === item.href || pathname.startsWith(item.href + '/')
         return (

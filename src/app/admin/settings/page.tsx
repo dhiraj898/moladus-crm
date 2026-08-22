@@ -1,10 +1,15 @@
 import Link from 'next/link'
+import { requireModuleView } from '@/features/rbac/guard'
 
 /**
  * Settings landing page (spec §6). Introduces the section and links to the
- * available settings areas — Stages today.
+ * available settings areas — Stages today. Re-asserts `settings.view` because
+ * the section shell admits automation-only users (see SettingsLayout); an
+ * automation-only user hitting this page is redirected to their first allowed
+ * module rather than shown settings content.
  */
-export default function SettingsPage() {
+export default async function SettingsPage() {
+  await requireModuleView('settings')
   return (
     <div className="flex flex-col gap-4">
       <Link

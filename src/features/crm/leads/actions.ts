@@ -2,7 +2,8 @@
 
 import { revalidatePath } from 'next/cache'
 import { getServiceClient } from '@/lib/supabase/server'
-import { getCurrentUser } from '@/lib/supabase/auth'
+import { requirePermission } from '@/features/rbac/permissions'
+import { scopeFor } from '@/features/rbac/can'
 import { logActivity } from '@/features/crm/activities/service'
 import { leadSchema, type LeadInputRaw } from './schema'
 
@@ -10,11 +11,12 @@ import { leadSchema, type LeadInputRaw } from './schema'
  * Server actions for leads (spec §6 — Lead detail + manual create/edit).
  *
  * All DB access goes through the server-only service-role client (RLS is
- * deny-all). Every mutating action asserts an admin session via
- * `getCurrentUser()` first and stamps the returned `user.id` as the lead's
- * `owner_id` (create) and as the actor on the activity timeline — that
- * per-action check is the effective authorization boundary (see
- * `src/lib/supabase/auth.ts`).
+ * deny-all). Every mutating action asserts `requirePermission('leads', 'edit')`
+ * first (which internally calls `getCurrentUser()` — authentication — then
+ * checks the `leads.edit` capability — authorization). For an own-scope role,
+ * the update path additionally re-checks record ownership BEFORE mutating, so a
+ * forged action id cannot write a lead the caller cannot see. `ctx.user.id` is
+ * stamped as the lead's `owner_id` (create) and as the timeline actor.
  */
 
 /** Discriminated result returned by mutating actions. */
@@ -22,8 +24,8 @@ export type ActionResult<T> =
   | { ok: true; data: T }
   | { ok: false; error: string; fieldErrors?: Record<string, string[]> }
 
-/** Error returned when a mutation is attempted without an admin session. */
-const UNAUTHENTICATED = 'You must be signed in to do that.'
+/** Returned when an own-scope caller targets a lead they do not own. */
+const NOT_FOUND = 'Not found'
 
 // ---------------------------------------------------------------------------
 // Create
@@ -37,8 +39,9 @@ const UNAUTHENTICATED = 'You must be signed in to do that.'
 export async function createLead(
   input: LeadInputRaw
 ): Promise<ActionResult<{ id: string }>> {
-  const user = await getCurrentUser()
-  if (!user) return { ok: false, error: UNAUTHENTICATED }
+  const gate = await requirePermission('leads', 'edit')
+  if (!gate.ok) return { ok: false, error: gate.error }
+  const { ctx } = gate
 
   const parsed = leadSchema.safeParse(input)
   if (!parsed.success) {
@@ -61,7 +64,10 @@ export async function createLead(
       source: source ?? null,
       status,
       product_id: product_id ?? null,
-      owner_id: user.id,
+      // Manual create: the creator becomes the initial owner/assignee. Round-robin
+      // auto-assignment applies ONLY to ingested submissions, never manual creates
+      // (RBAC spec §9); reassignment afterwards is done via `assignLead`.
+      owner_id: ctx.user.id,
       raw_payload: {},
     })
     .select('id')
@@ -75,7 +81,7 @@ export async function createLead(
   }
   const id = (data as { id: string }).id
 
-  await logActivity('lead', id, 'created', { actorId: user.id })
+  await logActivity('lead', id, 'created', { actorId: ctx.user.id })
 
   revalidatePath('/admin/leads')
   revalidatePath(`/admin/leads/${id}`)
@@ -94,8 +100,9 @@ export async function updateLead(
   id: string,
   input: LeadInputRaw
 ): Promise<ActionResult<void>> {
-  const user = await getCurrentUser()
-  if (!user) return { ok: false, error: UNAUTHENTICATED }
+  const gate = await requirePermission('leads', 'edit')
+  if (!gate.ok) return { ok: false, error: gate.error }
+  const { ctx } = gate
 
   const parsed = leadSchema.safeParse(input)
   if (!parsed.success) {
@@ -108,6 +115,20 @@ export async function updateLead(
   const { name, email, phone, state, source, status, product_id } = parsed.data
 
   const supabase = getServiceClient()
+
+  // Own-scope IDOR guard: re-read the row's owner_id and refuse when it is not
+  // the caller's — BEFORE mutating. This closes the gap where the read side
+  // hides a lead but a forged action id could still write it.
+  if (scopeFor(ctx.permissions, 'leads') === 'own') {
+    const { data: row } = await supabase
+      .from('leads')
+      .select('owner_id')
+      .eq('id', id)
+      .maybeSingle()
+    const owner = (row as { owner_id: string | null } | null)?.owner_id ?? null
+    if (owner !== ctx.user.id) return { ok: false, error: NOT_FOUND }
+  }
+
   const { error } = await supabase
     .from('leads')
     .update({
@@ -125,7 +146,7 @@ export async function updateLead(
     return { ok: false, error: `Failed to update lead: ${error.message}` }
   }
 
-  await logActivity('lead', id, 'edited', { actorId: user.id })
+  await logActivity('lead', id, 'edited', { actorId: ctx.user.id })
 
   revalidatePath('/admin/leads')
   revalidatePath(`/admin/leads/${id}`)

@@ -11,6 +11,7 @@ import { computeGST } from '@/features/gst/compute'
 import { resolveEntryStage } from '@/features/crm/automation/entry'
 import { runStageActions } from '@/features/crm/automation/runActions'
 import { logActivity } from '@/features/crm/activities/service'
+import { assignNext } from '@/features/rbac/assignment'
 
 /**
  * Public submission pipeline (spec §6, steps 1–14).
@@ -391,6 +392,17 @@ export async function POST(req: Request): Promise<Response> {
     entered_at: now,
   })
   await logActivity('deal', dealId, 'created')
+
+  // 6g. Auto-assign this submission's lead + deal to the next agent in the pool
+  // (round-robin). Best-effort: a null (empty pool) leaves owner_id null, and any
+  // failure never blocks enrollment. Same agent for the lead and the deal. Only
+  // this fresh-record path assigns — the resume/idempotency paths
+  // (findOpenDeal/resumeOpenDeal) never reassign an existing deal.
+  const assignee = await assignNext()
+  if (assignee) {
+    await supabase.from('leads').update({ owner_id: assignee }).eq('id', leadId)
+    await supabase.from('deals').update({ owner_id: assignee }).eq('id', dealId)
+  }
 
   // 7–9. Run the entry stage's on-enter actions (which, for the seeded Payment
   // Link Sent stage, mint the Razorpay link + send the enrollment WhatsApp),

@@ -2,18 +2,19 @@
 
 import { revalidatePath } from 'next/cache'
 import { getServiceClient } from '@/lib/supabase/server'
-import { getCurrentUser } from '@/lib/supabase/auth'
+import { requirePermission } from '@/features/rbac/permissions'
 import type { Stage } from '@/lib/supabase/types'
 import { stageSchema, type StageInputRaw } from './schema'
 
 /**
  * Server actions for the deal-stage pipeline config (spec §4.1 / §5 — Stages).
  *
- * All DB access goes through the server-only service-role client. RLS is
- * deny-all, so these actions are the only path to the `stages` table. Every
- * mutating action asserts an admin session via `getCurrentUser()` first —
- * that per-action check is the effective authorization boundary (see
- * `src/lib/supabase/auth.ts`). Each write revalidates the Stages editor path.
+ * Stage configuration lives under Settings, so every mutating action asserts
+ * `requirePermission('settings', 'edit')` first (which internally calls
+ * `getCurrentUser()` — authentication — then checks the `settings.edit`
+ * capability — authorization). All DB access goes through the server-only
+ * service-role client (RLS is deny-all), so these actions are the effective
+ * authorization boundary. Each write revalidates the Stages editor path.
  */
 
 const STAGES_PATH = '/admin/settings/stages'
@@ -23,9 +24,6 @@ export type ActionResult<T> =
   | { ok: true; data: T }
   | { ok: false; error: string; fieldErrors?: Record<string, string[]> }
 
-/** Error returned when a mutation is attempted without an admin session. */
-const UNAUTHENTICATED = 'You must be signed in to do that.'
-
 /**
  * Validate and insert a new stage. The new stage is appended to the end of the
  * pipeline (`display_order` = current max + 1) and is never the default.
@@ -33,8 +31,8 @@ const UNAUTHENTICATED = 'You must be signed in to do that.'
 export async function createStage(
   input: StageInputRaw
 ): Promise<ActionResult<Stage>> {
-  const user = await getCurrentUser()
-  if (!user) return { ok: false, error: UNAUTHENTICATED }
+  const gate = await requirePermission('settings', 'edit')
+  if (!gate.ok) return { ok: false, error: gate.error }
 
   const parsed = stageSchema.safeParse(input)
   if (!parsed.success) {
@@ -85,8 +83,8 @@ export async function updateStage(
   id: string,
   input: StageInputRaw
 ): Promise<ActionResult<Stage>> {
-  const user = await getCurrentUser()
-  if (!user) return { ok: false, error: UNAUTHENTICATED }
+  const gate = await requirePermission('settings', 'edit')
+  if (!gate.ok) return { ok: false, error: gate.error }
 
   const parsed = stageSchema.safeParse(input)
   if (!parsed.success) {
@@ -125,8 +123,8 @@ export async function updateStage(
 export async function reorderStages(
   orderedIds: string[]
 ): Promise<ActionResult<void>> {
-  const user = await getCurrentUser()
-  if (!user) return { ok: false, error: UNAUTHENTICATED }
+  const gate = await requirePermission('settings', 'edit')
+  if (!gate.ok) return { ok: false, error: gate.error }
 
   const supabase = getServiceClient()
   const now = new Date().toISOString()
@@ -153,8 +151,8 @@ export async function reorderStages(
  * default at rest.
  */
 export async function setDefaultStage(id: string): Promise<ActionResult<void>> {
-  const user = await getCurrentUser()
-  if (!user) return { ok: false, error: UNAUTHENTICATED }
+  const gate = await requirePermission('settings', 'edit')
+  if (!gate.ok) return { ok: false, error: gate.error }
 
   const supabase = getServiceClient()
 
@@ -211,8 +209,8 @@ export async function setDefaultStage(id: string): Promise<ActionResult<void>> {
  * deals). Otherwise the row is deleted.
  */
 export async function deleteStage(id: string): Promise<ActionResult<void>> {
-  const user = await getCurrentUser()
-  if (!user) return { ok: false, error: UNAUTHENTICATED }
+  const gate = await requirePermission('settings', 'edit')
+  if (!gate.ok) return { ok: false, error: gate.error }
 
   const supabase = getServiceClient()
 

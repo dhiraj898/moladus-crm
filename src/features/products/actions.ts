@@ -2,15 +2,20 @@
 
 import { revalidatePath } from 'next/cache'
 import { getServiceClient } from '@/lib/supabase/server'
+import { requirePermission } from '@/features/rbac/permissions'
 import type { Product } from '@/lib/supabase/types'
 import { productSchema, type ProductInputRaw } from './schema'
 
 /**
  * Server actions for the product master (spec §4 — Products).
  *
- * All DB access goes through the server-only service-role client. RLS is
- * deny-all, so these actions are the only path to the `products` table.
- * Every write revalidates `/admin/products` so the list reflects changes.
+ * All DB access goes through the server-only service-role client (RLS is
+ * deny-all), so these actions are the only path to the `products` table. Every
+ * mutating action asserts `requirePermission('products', 'edit')` first (which
+ * internally calls `getCurrentUser()` — authentication — then checks the
+ * `products.edit` capability — authorization); `listProducts`/`getProduct` are
+ * plain reads gated by the section layout. Every write revalidates
+ * `/admin/products` so the list reflects changes.
  */
 
 /** Discriminated result returned by mutating actions. */
@@ -50,6 +55,9 @@ export async function getProduct(id: string): Promise<Product | null> {
 export async function createProduct(
   input: ProductInputRaw
 ): Promise<ActionResult<Product>> {
+  const gate = await requirePermission('products', 'edit')
+  if (!gate.ok) return { ok: false, error: gate.error }
+
   const parsed = productSchema.safeParse(input)
   if (!parsed.success) {
     return {
@@ -86,6 +94,9 @@ export async function updateProduct(
   id: string,
   input: ProductInputRaw
 ): Promise<ActionResult<Product>> {
+  const gate = await requirePermission('products', 'edit')
+  if (!gate.ok) return { ok: false, error: gate.error }
+
   const parsed = productSchema.safeParse(input)
   if (!parsed.success) {
     return {
@@ -124,6 +135,9 @@ export async function setProductActive(
   id: string,
   active: boolean
 ): Promise<ActionResult<Product>> {
+  const gate = await requirePermission('products', 'edit')
+  if (!gate.ok) return { ok: false, error: gate.error }
+
   const supabase = getServiceClient()
   const { data, error } = await supabase
     .from('products')

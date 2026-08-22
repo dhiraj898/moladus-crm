@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { getServiceClient } from '@/lib/supabase/server'
-import { getCurrentUser } from '@/lib/supabase/auth'
+import { requirePermission } from '@/features/rbac/permissions'
 import { logActivity } from '@/features/crm/activities/service'
 import { contactSchema, type ContactInputRaw } from './schema'
 
@@ -10,10 +10,11 @@ import { contactSchema, type ContactInputRaw } from './schema'
  * Server actions for contacts (spec §6 — Contact detail + manual create/edit).
  *
  * All DB access goes through the server-only service-role client (RLS is
- * deny-all). Every mutating action asserts an admin session via
- * `getCurrentUser()` first and stamps the returned `user.id` as the actor on the
- * activity timeline — that per-action check is the effective authorization
- * boundary (see `src/lib/supabase/auth.ts`).
+ * deny-all). Every mutating action asserts `requirePermission('contacts',
+ * 'edit')` first (which internally calls `getCurrentUser()` — authentication —
+ * then checks the `contacts.edit` capability — authorization) and stamps
+ * `ctx.user.id` as the actor on the activity timeline. Contacts are a plain
+ * (unscoped) module, so there is no per-record ownership re-check.
  *
  * `whatsapp_number` is unique in the DB; a collision surfaces as a friendly
  * message rather than a raw Postgres error.
@@ -23,9 +24,6 @@ import { contactSchema, type ContactInputRaw } from './schema'
 export type ActionResult<T> =
   | { ok: true; data: T }
   | { ok: false; error: string; fieldErrors?: Record<string, string[]> }
-
-/** Error returned when a mutation is attempted without an admin session. */
-const UNAUTHENTICATED = 'You must be signed in to do that.'
 
 /** Postgres unique-violation SQLSTATE (the `contacts.whatsapp_number` index). */
 const UNIQUE_VIOLATION = '23505'
@@ -46,8 +44,9 @@ const WHATSAPP_EXISTS =
 export async function createContact(
   input: ContactInputRaw
 ): Promise<ActionResult<{ id: string }>> {
-  const user = await getCurrentUser()
-  if (!user) return { ok: false, error: UNAUTHENTICATED }
+  const gate = await requirePermission('contacts', 'edit')
+  if (!gate.ok) return { ok: false, error: gate.error }
+  const { ctx } = gate
 
   const parsed = contactSchema.safeParse(input)
   if (!parsed.success) {
@@ -90,7 +89,7 @@ export async function createContact(
   }
   const id = (data as { id: string }).id
 
-  await logActivity('contact', id, 'created', { actorId: user.id })
+  await logActivity('contact', id, 'created', { actorId: ctx.user.id })
 
   revalidatePath('/admin/contacts')
   revalidatePath(`/admin/contacts/${id}`)
@@ -111,8 +110,9 @@ export async function updateContact(
   id: string,
   input: ContactInputRaw
 ): Promise<ActionResult<void>> {
-  const user = await getCurrentUser()
-  if (!user) return { ok: false, error: UNAUTHENTICATED }
+  const gate = await requirePermission('contacts', 'edit')
+  if (!gate.ok) return { ok: false, error: gate.error }
+  const { ctx } = gate
 
   const parsed = contactSchema.safeParse(input)
   if (!parsed.success) {
@@ -172,7 +172,7 @@ export async function updateContact(
     return { ok: false, error: `Failed to update contact: ${error.message}` }
   }
 
-  await logActivity('contact', id, 'edited', { actorId: user.id })
+  await logActivity('contact', id, 'edited', { actorId: ctx.user.id })
 
   revalidatePath('/admin/contacts')
   revalidatePath(`/admin/contacts/${id}`)

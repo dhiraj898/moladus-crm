@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { listDeals, type DealFilters } from '@/features/records/queries'
 import { formatMoney } from '@/features/form-engine/estimate'
 import PaymentStatusChip from '@/features/records/PaymentStatusChip'
+import { requireModuleView } from '@/features/rbac/guard'
 import type { PaymentStatus } from '@/lib/supabase/types'
 
 /**
@@ -37,13 +38,14 @@ export default async function DealsPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
+  const ctx = await requireModuleView('deals')
   const sp = await searchParams
   const filters: DealFilters = {
     paymentStatus: first(sp.paymentStatus),
     from: first(sp.from),
     to: first(sp.to),
   }
-  const deals = await listDeals(filters)
+  const deals = await listDeals(filters, undefined, ctx)
 
   const exportParams = new URLSearchParams({ type: 'deals' })
   if (filters.paymentStatus)

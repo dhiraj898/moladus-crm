@@ -14,6 +14,13 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),
+      // `server-only` throws on import outside an RSC. Next.js aliases it to a
+      // noop at build time; mirror that in Vitest so unit tests can import
+      // modules (e.g. rbac/assignment) that carry `import 'server-only'`
+      // alongside pure, testable exports.
+      'server-only': fileURLToPath(
+        new URL('./node_modules/server-only/empty.js', import.meta.url)
+      ),
     },
   },
 })

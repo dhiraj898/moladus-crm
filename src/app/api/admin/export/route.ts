@@ -1,12 +1,12 @@
 import { NextResponse, type NextRequest } from 'next/server'
-import { createServerClient } from '@supabase/ssr'
-import { cookies } from 'next/headers'
 import {
   searchLeads,
   listDeals,
   type LeadFilters,
   type DealFilters,
 } from '@/features/records/queries'
+import { getCurrentUserWithRole } from '@/features/rbac/permissions'
+import { can } from '@/features/rbac/can'
 
 /**
  * Rows to fetch per page when streaming a full export. The export pages through
@@ -46,31 +46,12 @@ async function fetchAll<T>(
  * so the same whitelisting/sanitisation applies to every filter. Every CSV
  * field is quoted and escaped, and values that could be interpreted as a
  * spreadsheet formula are neutralised (CSV-injection defence).
+ *
+ * The export also RESPECTS RECORD SCOPE: it resolves the caller's role via
+ * `getCurrentUserWithRole()` and passes that ctx to the query functions, so an
+ * own-scope agent exports only their own leads/deals — never the whole table.
  */
 export const dynamic = 'force-dynamic'
-
-/** Confirm there is an authenticated admin session for this request. */
-async function isAuthenticated(): Promise<boolean> {
-  const cookieStore = await cookies()
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return cookieStore.getAll()
-        },
-        setAll() {
-          // No-op: this is a read-only auth check in a route handler.
-        },
-      },
-    }
-  )
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  return Boolean(user)
-}
 
 /**
  * Escape a single CSV field. Always quotes the value, doubles embedded quotes,
@@ -110,7 +91,8 @@ function param(
 }
 
 export async function GET(request: NextRequest) {
-  if (!(await isAuthenticated())) {
+  const ctx = await getCurrentUserWithRole()
+  if (!ctx) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
@@ -118,6 +100,9 @@ export async function GET(request: NextRequest) {
   const type = searchParams.get('type')
 
   if (type === 'leads') {
+    if (!can(ctx.permissions, 'leads', 'view')) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    }
     const filters: LeadFilters = {
       q: param(searchParams, 'q'),
       status: param(searchParams, 'status'),
@@ -125,7 +110,7 @@ export async function GET(request: NextRequest) {
       formId: param(searchParams, 'formId'),
     }
     const leads = await fetchAll((offset, limit) =>
-      searchLeads(filters, { offset, limit })
+      searchLeads(filters, { offset, limit }, ctx)
     )
     const headers = [
       'id',
@@ -155,13 +140,16 @@ export async function GET(request: NextRequest) {
   }
 
   if (type === 'deals') {
+    if (!can(ctx.permissions, 'deals', 'view')) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    }
     const filters: DealFilters = {
       paymentStatus: param(searchParams, 'paymentStatus'),
       from: param(searchParams, 'from'),
       to: param(searchParams, 'to'),
     }
     const deals = await fetchAll((offset, limit) =>
-      listDeals(filters, { offset, limit })
+      listDeals(filters, { offset, limit }, ctx)
     )
     const headers = [
       'id',

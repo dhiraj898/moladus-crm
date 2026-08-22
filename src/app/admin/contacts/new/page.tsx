@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { searchLeads } from '@/features/records/queries'
+import { requireModuleView } from '@/features/rbac/guard'
 import ContactForm from '../ContactForm'
 
 /**
@@ -9,7 +10,8 @@ import ContactForm from '../ContactForm'
 export const dynamic = 'force-dynamic'
 
 export default async function NewContactPage() {
-  const leads = await searchLeads({})
+  const ctx = await requireModuleView('contacts')
+  const leads = await searchLeads({}, undefined, ctx)
 
   return (
     <div className="mx-auto max-w-[960px]">

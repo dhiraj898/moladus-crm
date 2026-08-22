@@ -2,7 +2,8 @@
 
 import { revalidatePath } from 'next/cache'
 import { getServiceClient } from '@/lib/supabase/server'
-import { getCurrentUser } from '@/lib/supabase/auth'
+import { requirePermission } from '@/features/rbac/permissions'
+import { scopeFor } from '@/features/rbac/can'
 import { getEnv } from '@/lib/env'
 import { computeGST, type GSTBreakdown } from '@/features/gst/compute'
 import { createPaymentLink } from '@/features/razorpay/paymentLink'
@@ -21,13 +22,15 @@ import {
  * create/edit).
  *
  * All DB access goes through the server-only service-role client (RLS is
- * deny-all). Every mutating action asserts an admin session via
- * `getCurrentUser()` first and stamps the returned `user.id` as the actor on the
- * deal, its stage events, and the activity timeline — that per-action check is
- * the effective authorization boundary (see `src/lib/supabase/auth.ts`). Manual
- * sales status lives on `deals.stage_id`; `payment_status` is separate and
- * auto-managed. GST is ALWAYS recomputed from the product row via `computeGST`
- * — never accepted from the client.
+ * deny-all). Every mutating action asserts `requirePermission('deals', 'edit')`
+ * first (which internally calls `getCurrentUser()` — authentication — then
+ * checks the `deals.edit` capability — authorization) and stamps `ctx.user.id`
+ * as the actor on the deal, its stage events, and the activity timeline. For an
+ * own-scope role, the stage-change and update paths additionally re-check record
+ * ownership BEFORE mutating, so a forged action id cannot write a deal the caller
+ * cannot see. Manual sales status lives on `deals.stage_id`; `payment_status` is
+ * separate and auto-managed. GST is ALWAYS recomputed from the product row via
+ * `computeGST` — never accepted from the client.
  */
 
 /** Discriminated result returned by mutating actions. */
@@ -35,8 +38,8 @@ export type ActionResult<T> =
   | { ok: true; data: T; warning?: string }
   | { ok: false; error: string; fieldErrors?: Record<string, string[]> }
 
-/** Error returned when a mutation is attempted without an admin session. */
-const UNAUTHENTICATED = 'You must be signed in to do that.'
+/** Returned when an own-scope caller targets a deal they do not own. */
+const NOT_FOUND = 'Not found'
 
 /** Postgres unique-violation SQLSTATE (the `deals_open_dedupe` index). */
 const UNIQUE_VIOLATION = '23505'
@@ -60,15 +63,16 @@ export async function changeDealStage(
   dealId: string,
   stageId: string
 ): Promise<ActionResult<void>> {
-  const user = await getCurrentUser()
-  if (!user) return { ok: false, error: UNAUTHENTICATED }
+  const gate = await requirePermission('deals', 'edit')
+  if (!gate.ok) return { ok: false, error: gate.error }
+  const { ctx } = gate
 
   const supabase = getServiceClient()
 
-  // Current stage (for the `from` side of the transition).
+  // Current stage (for the `from` side of the transition) + owner (own-scope guard).
   const { data: dealRow, error: dealError } = await supabase
     .from('deals')
-    .select('stage_id')
+    .select('stage_id, owner_id')
     .eq('id', dealId)
     .maybeSingle()
 
@@ -76,6 +80,12 @@ export async function changeDealStage(
     return { ok: false, error: `Failed to change stage: ${dealError.message}` }
   }
   if (!dealRow) return { ok: false, error: 'Deal not found.' }
+
+  // Own-scope IDOR guard: refuse a deal the caller does not own, BEFORE mutating.
+  if (scopeFor(ctx.permissions, 'deals') === 'own') {
+    const owner = (dealRow as { owner_id: string | null }).owner_id
+    if (owner !== ctx.user.id) return { ok: false, error: NOT_FOUND }
+  }
 
   const fromStageId = (dealRow as { stage_id: string | null }).stage_id
 
@@ -117,7 +127,7 @@ export async function changeDealStage(
     .insert({
       deal_id: dealId,
       stage_id: stageId,
-      actor_id: user.id,
+      actor_id: ctx.user.id,
       entered_at: now,
     })
 
@@ -127,7 +137,7 @@ export async function changeDealStage(
 
   // Timeline entry (best-effort; never throws).
   await logActivity('deal', dealId, 'stage_change', {
-    actorId: user.id,
+    actorId: ctx.user.id,
     metadata: { from: fromName, to: toName },
   })
 
@@ -154,8 +164,10 @@ export async function previewDealGST(
   productId: string,
   placeOfSupply: string
 ): Promise<ActionResult<GSTBreakdown>> {
-  const user = await getCurrentUser()
-  if (!user) return { ok: false, error: UNAUTHENTICATED }
+  // Gated by deals.edit: the GST preview is only reachable from the deal
+  // create/edit forms, which require edit rights.
+  const gate = await requirePermission('deals', 'edit')
+  if (!gate.ok) return { ok: false, error: gate.error }
 
   const supabase = getServiceClient()
   const { data, error } = await supabase
@@ -185,8 +197,9 @@ export async function previewDealGST(
 export async function createDeal(
   input: CreateDealInputRaw
 ): Promise<ActionResult<{ id: string }>> {
-  const user = await getCurrentUser()
-  if (!user) return { ok: false, error: UNAUTHENTICATED }
+  const gate = await requirePermission('deals', 'edit')
+  if (!gate.ok) return { ok: false, error: gate.error }
+  const { ctx } = gate
 
   const parsed = createDealSchema.safeParse(input)
   if (!parsed.success) {
@@ -251,7 +264,10 @@ export async function createDeal(
       place_of_supply,
       stage_id: defaultStageId,
       stage_entered_at: now,
-      owner_id: user.id,
+      // Manual create: the creator becomes the initial owner/assignee. Round-robin
+      // auto-assignment applies ONLY to ingested submissions, never manual creates
+      // (RBAC spec §9); reassignment afterwards is done via `assignDeal`.
+      owner_id: ctx.user.id,
       payment_status: 'pending',
     })
     .select('id')
@@ -272,10 +288,10 @@ export async function createDeal(
   await supabase.from('deal_stage_events').insert({
     deal_id: dealId,
     stage_id: defaultStageId,
-    actor_id: user.id,
+    actor_id: ctx.user.id,
     entered_at: now,
   })
-  await logActivity('deal', dealId, 'created', { actorId: user.id })
+  await logActivity('deal', dealId, 'created', { actorId: ctx.user.id })
 
   let warning: string | undefined
 
@@ -362,8 +378,9 @@ export async function updateDeal(
   id: string,
   input: UpdateDealInputRaw
 ): Promise<ActionResult<void>> {
-  const user = await getCurrentUser()
-  if (!user) return { ok: false, error: UNAUTHENTICATED }
+  const gate = await requirePermission('deals', 'edit')
+  if (!gate.ok) return { ok: false, error: gate.error }
+  const { ctx } = gate
 
   const parsed = updateDealSchema.safeParse(input)
   if (!parsed.success) {
@@ -376,6 +393,17 @@ export async function updateDeal(
   const { contact_id, lead_id, product_id, place_of_supply } = parsed.data
 
   const supabase = getServiceClient()
+
+  // Own-scope IDOR guard: refuse a deal the caller does not own, BEFORE mutating.
+  if (scopeFor(ctx.permissions, 'deals') === 'own') {
+    const { data: ownerRow } = await supabase
+      .from('deals')
+      .select('owner_id')
+      .eq('id', id)
+      .maybeSingle()
+    const owner = (ownerRow as { owner_id: string | null } | null)?.owner_id ?? null
+    if (owner !== ctx.user.id) return { ok: false, error: NOT_FOUND }
+  }
 
   const { data: productRow, error: productError } = await supabase
     .from('products')
@@ -415,7 +443,7 @@ export async function updateDeal(
     return { ok: false, error: `Failed to update deal: ${updateError.message}` }
   }
 
-  await logActivity('deal', id, 'edited', { actorId: user.id })
+  await logActivity('deal', id, 'edited', { actorId: ctx.user.id })
 
   revalidatePath('/admin/deals')
   revalidatePath(`/admin/deals/${id}`)

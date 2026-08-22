@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { listProducts } from '@/features/products/actions'
 import { listContacts, searchLeads } from '@/features/records/queries'
+import { requireModuleView } from '@/features/rbac/guard'
 import DealForm from '../DealForm'
 
 /**
@@ -10,10 +11,11 @@ import DealForm from '../DealForm'
 export const dynamic = 'force-dynamic'
 
 export default async function NewDealPage() {
+  const ctx = await requireModuleView('deals')
   const [products, contacts, leads] = await Promise.all([
     listProducts(),
     listContacts(''),
-    searchLeads({}),
+    searchLeads({}, undefined, ctx),
   ])
 
   const activeProducts = products.filter((p) => p.active !== false)
