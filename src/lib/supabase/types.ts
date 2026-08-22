@@ -313,3 +313,68 @@ export interface AutomationRun {
   stage_entered_at: string
   fired_at: string
 }
+
+// ---------------------------------------------------------------------------
+// RBAC (spec 3 — migration 0005)
+// ---------------------------------------------------------------------------
+
+/** Every gated admin module. */
+export type ModuleKey =
+  | 'products'
+  | 'forms'
+  | 'leads'
+  | 'deals'
+  | 'contacts'
+  | 'settings'
+  | 'automation'
+
+/** A single capability within a module. */
+export type Capability = 'view' | 'edit'
+
+/** Record visibility scope for the record modules (leads, deals). */
+export type RecordScope = 'all' | 'own'
+
+/** view/edit for a plain module. */
+export interface ModulePermission {
+  view: boolean
+  edit: boolean
+}
+
+/** view/edit + scope for the record modules. */
+export interface ScopedModulePermission extends ModulePermission {
+  scope: RecordScope
+}
+
+/** The full per-module matrix stored in roles.permissions. */
+export interface Permissions {
+  products: ModulePermission
+  forms: ModulePermission
+  leads: ScopedModulePermission
+  deals: ScopedModulePermission
+  contacts: ModulePermission
+  settings: ModulePermission
+  automation: ModulePermission
+}
+
+export interface Role {
+  id: string
+  name: string
+  permissions: Permissions
+  in_assignment_pool: boolean
+  is_system: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface Profile {
+  user_id: string
+  role_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface AssignmentState {
+  key: string
+  last_user_id: string | null
+  updated_at: string
+}
