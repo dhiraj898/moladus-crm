@@ -55,3 +55,45 @@ html.light {
     font-variant-numeric: tabular-nums;
   }
 }
+
+/* Form-engine field transitions (spec §5 — ~0.3s slide + fade, ease-out).
+   The field container is keyed on the visible index so re-mounting replays the
+   animation; direction picks slide-up (forward) or slide-down (back). */
+@layer utilities {
+  @keyframes fe-enter-up {
+    from {
+      opacity: 0;
+      transform: translateY(24px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes fe-enter-down {
+    from {
+      opacity: 0;
+      transform: translateY(-24px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .fe-enter-forward {
+    animation: fe-enter-up 0.3s ease-out;
+  }
+
+  .fe-enter-back {
+    animation: fe-enter-down 0.3s ease-out;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .fe-enter-forward,
+    .fe-enter-back {
+      animation: none;
+    }
+  }
+}
