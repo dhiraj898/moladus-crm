@@ -5,6 +5,7 @@ import { getActivityTimeline } from '@/features/crm/activities/service'
 import { formatMoney } from '@/features/form-engine/estimate'
 import PaymentStatusChip from '@/features/records/PaymentStatusChip'
 import ActivityTimeline from '@/features/crm/ActivityTimeline'
+import { requireModuleView } from '@/features/rbac/guard'
 
 /**
  * Lead detail (spec §6 — Lead detail). Server component: loads the lead, its
@@ -110,8 +111,9 @@ export default async function LeadDetailPage({
 }: {
   params: Promise<{ id: string }>
 }) {
+  const ctx = await requireModuleView('leads')
   const { id } = await params
-  const detail = await getLeadDetail(id)
+  const detail = await getLeadDetail(id, ctx)
   if (!detail) notFound()
 
   const { lead, owner_email, contact, deals } = detail

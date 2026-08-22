@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { listProducts } from '@/features/products/actions'
 import { getLeadDetail } from '@/features/records/queries'
+import { requireModuleView } from '@/features/rbac/guard'
 import LeadForm from '../../LeadForm'
 
 /**
@@ -16,8 +17,9 @@ export default async function EditLeadPage({
 }: {
   params: Promise<{ id: string }>
 }) {
+  const ctx = await requireModuleView('leads')
   const { id } = await params
-  const detail = await getLeadDetail(id)
+  const detail = await getLeadDetail(id, ctx)
   if (!detail) notFound()
 
   const products = await listProducts()

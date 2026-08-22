@@ -6,6 +6,7 @@ import {
   listContacts,
   searchLeads,
 } from '@/features/records/queries'
+import { requireModuleView } from '@/features/rbac/guard'
 import DealForm from '../../DealForm'
 
 /**
@@ -20,14 +21,15 @@ export default async function EditDealPage({
 }: {
   params: Promise<{ id: string }>
 }) {
+  const ctx = await requireModuleView('deals')
   const { id } = await params
-  const timeline = await getDealTimeline(id)
+  const timeline = await getDealTimeline(id, ctx)
   if (!timeline) notFound()
 
   const [products, contacts, leads] = await Promise.all([
     listProducts(),
     listContacts(''),
-    searchLeads({}),
+    searchLeads({}, undefined, ctx),
   ])
 
   // Keep the current product even if it is now inactive, so the edit form can

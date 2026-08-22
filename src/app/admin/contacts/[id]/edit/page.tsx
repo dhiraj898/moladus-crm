@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { getContactDetail, searchLeads } from '@/features/records/queries'
+import { requireModuleView } from '@/features/rbac/guard'
 import ContactForm from '../../ContactForm'
 
 /**
@@ -15,10 +16,11 @@ export default async function EditContactPage({
 }: {
   params: Promise<{ id: string }>
 }) {
+  const ctx = await requireModuleView('contacts')
   const { id } = await params
   const [detail, leads] = await Promise.all([
     getContactDetail(id),
-    searchLeads({}),
+    searchLeads({}, undefined, ctx),
   ])
   if (!detail) notFound()
 

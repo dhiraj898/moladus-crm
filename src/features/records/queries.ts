@@ -1,5 +1,7 @@
 import 'server-only'
 import { getServiceClient } from '@/lib/supabase/server'
+import { ownerScopeFilter } from '@/features/rbac/can'
+import type { CurrentUserWithRole } from '@/features/rbac/permissions'
 import type {
   Contact,
   Deal,
@@ -142,10 +144,15 @@ export type LeadListItem = Lead & {
  * caller (the CSV export) can page through the full result set. Ordering is
  * `created_at desc, id desc` — a stable secondary key so paging never skips or
  * repeats rows that share a `created_at`.
+ *
+ * When `ctx` is supplied and the role's `leads` scope is `own`, results are
+ * filtered to the caller's own records (`owner_id`), so own-scope agents — and
+ * the CSV export run on their behalf — see only leads assigned to them.
  */
 export async function searchLeads(
   filters: LeadFilters = {},
-  page?: QueryPage
+  page?: QueryPage,
+  ctx?: CurrentUserWithRole
 ): Promise<LeadListItem[]> {
   const supabase = getServiceClient()
 
@@ -154,6 +161,12 @@ export async function searchLeads(
     .select('*, product:products (id, name), form:forms (id, name)')
     .order('created_at', { ascending: false })
     .order('id', { ascending: false })
+
+  // Own-scope roles see only leads they are assigned (owner_id).
+  if (ctx) {
+    const ownerId = ownerScopeFilter(ctx.permissions, 'leads', ctx.user.id)
+    if (ownerId) query = query.eq('owner_id', ownerId)
+  }
 
   query = page
     ? query.range(page.offset, page.offset + page.limit - 1)
@@ -207,10 +220,15 @@ export type DealListItem = Deal & {
  * caller (the CSV export) can page through the full result set. Ordering is
  * `created_at desc, id desc` — a stable secondary key so paging never skips or
  * repeats rows that share a `created_at`.
+ *
+ * When `ctx` is supplied and the role's `deals` scope is `own`, results are
+ * filtered to the caller's own records (`owner_id`), so own-scope agents — and
+ * the CSV export run on their behalf — see only deals assigned to them.
  */
 export async function listDeals(
   filters: DealFilters = {},
-  page?: QueryPage
+  page?: QueryPage,
+  ctx?: CurrentUserWithRole
 ): Promise<DealListItem[]> {
   const supabase = getServiceClient()
 
@@ -221,6 +239,12 @@ export async function listDeals(
     )
     .order('created_at', { ascending: false })
     .order('id', { ascending: false })
+
+  // Own-scope roles see only deals they are assigned (owner_id).
+  if (ctx) {
+    const ownerId = ownerScopeFilter(ctx.permissions, 'deals', ctx.user.id)
+    if (ownerId) query = query.eq('owner_id', ownerId)
+  }
 
   query = page
     ? query.range(page.offset, page.offset + page.limit - 1)
@@ -301,8 +325,15 @@ export interface DealTimeline {
  * Load a single deal with its full timeline: originating lead, resolved
  * contact, bound product, current stage and every notification_log row, for the
  * deal detail screen. Returns `null` when the id does not resolve to a deal.
+ *
+ * When `ctx` is supplied and the role's `deals` scope is `own`, an own-scope
+ * caller cannot deep-link into another agent's deal: if the loaded row is not
+ * owned by the caller, this returns `null` (indistinguishable from not-found).
  */
-export async function getDealTimeline(id: string): Promise<DealTimeline | null> {
+export async function getDealTimeline(
+  id: string,
+  ctx?: CurrentUserWithRole
+): Promise<DealTimeline | null> {
   if (!pickUuid(id)) return null
   const supabase = getServiceClient()
 
@@ -325,6 +356,13 @@ export async function getDealTimeline(id: string): Promise<DealTimeline | null> 
     notifications: NotificationLog[] | null
   }
   const row = data as unknown as Row
+
+  // Own-scope callers may only open their own deals.
+  if (ctx) {
+    const ownerId = ownerScopeFilter(ctx.permissions, 'deals', ctx.user.id)
+    if (ownerId && row.owner_id !== ownerId) return null
+  }
+
   const { lead, contact, product, stage, notifications, ...deal } = row
 
   const sorted = [...(notifications ?? [])].sort((a, b) => {
@@ -476,8 +514,15 @@ export interface LeadDetail {
  * Load a single lead with its linked contact, its deals (with product + stage
  * names), and its owner's email for the lead detail screen. Returns `null` when
  * the id is malformed or does not resolve to a lead.
+ *
+ * When `ctx` is supplied and the role's `leads` scope is `own`, an own-scope
+ * caller cannot deep-link into another agent's lead: if the loaded row is not
+ * owned by the caller, this returns `null` (indistinguishable from not-found).
  */
-export async function getLeadDetail(id: string): Promise<LeadDetail | null> {
+export async function getLeadDetail(
+  id: string,
+  ctx?: CurrentUserWithRole
+): Promise<LeadDetail | null> {
   if (!pickUuid(id)) return null
   const supabase = getServiceClient()
 
@@ -490,6 +535,12 @@ export async function getLeadDetail(id: string): Promise<LeadDetail | null> {
   if (error) throw new Error(`Failed to load lead: ${error.message}`)
   if (!data) return null
   const lead = data as unknown as Lead
+
+  // Own-scope callers may only open their own leads.
+  if (ctx) {
+    const ownerId = ownerScopeFilter(ctx.permissions, 'leads', ctx.user.id)
+    if (ownerId && lead.owner_id !== ownerId) return null
+  }
 
   const [{ data: contactRow }, { data: dealRows }, owner_email] =
     await Promise.all([

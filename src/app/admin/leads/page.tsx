@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { searchLeads, type LeadFilters } from '@/features/records/queries'
+import { requireModuleView } from '@/features/rbac/guard'
 
 /**
  * Leads list (spec §10 — Leads list; plan Task 11.1). Server component: reads
@@ -37,6 +38,7 @@ export default async function LeadsPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
+  const ctx = await requireModuleView('leads')
   const sp = await searchParams
   const filters: LeadFilters = {
     q: first(sp.q),
@@ -44,7 +46,7 @@ export default async function LeadsPage({
     productId: first(sp.productId),
     formId: first(sp.formId),
   }
-  const leads = await searchLeads(filters)
+  const leads = await searchLeads(filters, undefined, ctx)
 
   const exportParams = new URLSearchParams({ type: 'leads' })
   if (filters.q) exportParams.set('q', filters.q)

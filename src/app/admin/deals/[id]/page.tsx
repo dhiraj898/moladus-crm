@@ -9,6 +9,7 @@ import { listStages } from '@/features/crm/stages/queries'
 import { formatMoney } from '@/features/form-engine/estimate'
 import PaymentStatusChip from '@/features/records/PaymentStatusChip'
 import ActivityTimeline from '@/features/crm/ActivityTimeline'
+import { requireModuleView } from '@/features/rbac/guard'
 import StageControl from './StageControl'
 import type { NotificationLog } from '@/lib/supabase/types'
 
@@ -92,8 +93,9 @@ export default async function DealDetailPage({
 }: {
   params: Promise<{ id: string }>
 }) {
+  const ctx = await requireModuleView('deals')
   const { id } = await params
-  const timeline = await getDealTimeline(id)
+  const timeline = await getDealTimeline(id, ctx)
   if (!timeline) notFound()
 
   const { deal, lead, contact, product, notifications } = timeline
