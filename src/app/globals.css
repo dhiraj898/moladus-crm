@@ -1,0 +1,57 @@
+@import url('https://rsms.me/inter/inter.css');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Design tokens — Moladus Artifact Style Guide.
+   Dark is the default (bare :root); light is applied via `html.light`.
+   Never hardcode a hex outside these blocks. */
+:root {
+  --bg: #0a0a0a;
+  --surface: #111111;
+  --surface2: #171717;
+  --line: #242424;
+  --text: #e9e7e4;
+  --dim: #9c9893;
+  --faint: #605d59;
+  --accent: #ff4500;
+  --red: #f87171;
+  --amber: #fbbf24;
+  --green: #4ade80;
+  --chip-bg: #1c1c1c;
+}
+
+html.light {
+  --bg: #faf9f7;
+  --surface: #ffffff;
+  --surface2: #f2f0ec;
+  --line: #e4e1db;
+  --text: #1c1a17;
+  --dim: #6b675f;
+  --faint: #a09b92;
+  --accent: #e63e00;
+  --red: #b91c1c;
+  --amber: #b45309;
+  --green: #15803d;
+  --chip-bg: #efede8;
+}
+
+@layer base {
+  html {
+    color-scheme: dark light;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'InterVariable', 'Inter', system-ui, sans-serif;
+    font-feature-settings: 'ss01', 'ss02', 'ss03', 'cv05', 'cv11';
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Numerals align in columns wherever tabular-nums is requested. */
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+}
