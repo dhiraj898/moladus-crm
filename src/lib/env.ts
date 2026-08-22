@@ -12,6 +12,7 @@ const schema = z.object({
   NEXT_PUBLIC_HCAPTCHA_SITE_KEY: z.string().min(1),
   BUSINESS_STATE: z.string().min(1),
   NEXT_PUBLIC_APP_URL: z.string().url(),
+  CRON_SECRET: z.string().min(1),
 })
 
 export type Env = z.infer<typeof schema>

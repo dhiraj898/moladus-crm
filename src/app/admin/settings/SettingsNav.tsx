@@ -4,11 +4,13 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 
 /**
- * Sub-navigation for the Settings section. Stages is the only entry today;
- * later specs add more (custom fields, roles, etc.). Active-item highlighting
- * mirrors the primary `AdminNav`.
+ * Sub-navigation for the Settings section. Active-item highlighting mirrors the
+ * primary `AdminNav`. Later specs add more entries (custom fields, roles, etc.).
  */
-const SETTINGS_NAV = [{ href: '/admin/settings/stages', label: 'Stages' }] as const
+const SETTINGS_NAV = [
+  { href: '/admin/settings/stages', label: 'Stages' },
+  { href: '/admin/settings/automation', label: 'Automation' },
+] as const
 
 export default function SettingsNav() {
   const pathname = usePathname()

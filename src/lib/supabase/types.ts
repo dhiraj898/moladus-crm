@@ -250,3 +250,66 @@ export interface Activity {
   metadata: Record<string, unknown>
   created_at: string
 }
+
+// ---------------------------------------------------------------------------
+// Workflow automation (spec 2 — migration 0004)
+// ---------------------------------------------------------------------------
+
+/** Comparison operators for a condition predicate. */
+export type ConditionOp = 'eq' | 'neq' | 'in' | 'not_in' | 'is_empty' | 'not_empty'
+
+/**
+ * A single `{field, op, value}` predicate evaluated against a context object
+ * (form answers for entry rules, the deal row for SLA rules). `value` is
+ * unused for `is_empty`/`not_empty`, and an array for `in`/`not_in`.
+ */
+export interface Condition {
+  field: string
+  op: ConditionOp
+  value?: unknown
+}
+
+/** stage_actions.action_type — on-enter actions (never move_stage). */
+export type StageActionType = 'send_whatsapp' | 'create_payment_link'
+
+/** sla_rules.action_type — time-based actions (may move stage). */
+export type SlaActionType = 'send_whatsapp' | 'move_stage'
+
+export interface EntryRule {
+  id: string
+  condition: Condition | null
+  to_stage_id: string
+  priority: number
+  active: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface StageAction {
+  id: string
+  stage_id: string
+  action_type: StageActionType
+  config: Record<string, unknown>
+  run_order: number
+  active: boolean
+  created_at: string
+}
+
+export interface SlaRule {
+  id: string
+  from_stage_id: string
+  delay_minutes: number
+  condition: Condition | null
+  action_type: SlaActionType
+  config: Record<string, unknown>
+  active: boolean
+  created_at: string
+}
+
+export interface AutomationRun {
+  id: string
+  deal_id: string
+  sla_rule_id: string
+  stage_entered_at: string
+  fired_at: string
+}
