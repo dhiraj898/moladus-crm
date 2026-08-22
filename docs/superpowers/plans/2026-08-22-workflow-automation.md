@@ -333,3 +333,23 @@ describe('evaluateCondition', () => {
 - **Loop guard:** `stage_actions.action_type` cannot be `move_stage` (DB check + Zod); only `sla_rules` move stages, each at-most-once per stage-entry via `automation_runs` unique index.
 - **Behaviour preservation:** the WS1 seed reproduces v1 (default entry rule → Payment Link Sent → create link + send enrollment_link), so the ingest reshape (WS3) is behaviour-neutral for the direct-pay path; existing ingest/GST tests must stay green.
 - **ENV-PENDING:** apply migration 0004; live entry routing + on-enter link/WhatsApp on a real submission; SLA firing on schedule (Railway cron with CRON_SECRET, or manual curl); reminder + auto-Closed-Lost end-to-end.
+
+## Workstream 6: formrunner-confirmation (link-less entry routes)
+
+### Task 6.1: FormRunner handles a null payment link
+
+**Files:**
+- Modify: `src/app/f/[slug]/FormRunner.tsx`
+- Modify: `src/app/f/[slug]/thank-you/page.tsx` (if needed for the no-payment copy)
+
+**Interfaces:**
+- Consumes: the ingest response `{ success: boolean, payment_link: string | null }`.
+- Produces: on `success:true` with `payment_link` present → redirect to the link (unchanged); on `success:true` with `payment_link === null` → show an in-form confirmation state ("Thanks — we've got your details and someone from the team will be in touch shortly on WhatsApp."), NOT the error state.
+
+- [ ] **Step 1: Locate the submit handler** in `FormRunner.tsx` where the ingest response is used (currently `window.location = payment_link` and null is treated as an error). Add a `submitted` success state.
+- [ ] **Step 2: Implement** — after a successful POST: if `data.payment_link` is a non-empty string, `window.location.assign(data.payment_link)`; else set a `confirmed` state that renders a full-screen confirmation panel (design tokens: accent kicker, message, no inputs). Only treat `data.success === false` (or a network/HTTP error) as the error state.
+- [ ] **Step 3: Copy** — confirmation heading + subtext; reuse the form's product context. Keep it consistent with the thank-you page styling.
+- [ ] **Step 4: Gates** — lint + type-check + build
+- [ ] **Step 5: Commit** — `git commit -am "feat(form): show confirmation when a submission routes to a no-payment stage"`
+
+Note: end-to-end verification is ENV-PENDING (needs migration 0004 applied + an entry rule routing to a stage without a create_payment_link action, e.g. Call Requested).
