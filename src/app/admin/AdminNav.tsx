@@ -2,23 +2,43 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import type { ModuleKey } from '@/lib/supabase/types'
 
-const NAV_ITEMS = [
-  { href: '/admin/products', label: 'Products' },
-  { href: '/admin/forms', label: 'Forms' },
-  { href: '/admin/leads', label: 'Leads' },
-  { href: '/admin/deals', label: 'Deals' },
-  { href: '/admin/contacts', label: 'Contacts' },
-  { href: '/admin/settings', label: 'Settings' },
-] as const
+/**
+ * Primary sidebar nav (plan Task 6.2). Each item maps to the module whose
+ * `view` capability gates it; Settings is shown when the role can view either
+ * `settings` or `automation` (automation lives under Settings). The `allowed`
+ * map is computed server-side in `AdminLayout` from the resolved permissions.
+ */
+const NAV_ITEMS: {
+  href: string
+  label: string
+  module: ModuleKey
+}[] = [
+  { href: '/admin/products', label: 'Products', module: 'products' },
+  { href: '/admin/forms', label: 'Forms', module: 'forms' },
+  { href: '/admin/leads', label: 'Leads', module: 'leads' },
+  { href: '/admin/deals', label: 'Deals', module: 'deals' },
+  { href: '/admin/contacts', label: 'Contacts', module: 'contacts' },
+  { href: '/admin/settings', label: 'Settings', module: 'settings' },
+]
 
-/** Sidebar navigation with active-section highlighting. */
-export default function AdminNav() {
+export default function AdminNav({
+  allowed,
+}: {
+  allowed: Record<ModuleKey, boolean>
+}) {
   const pathname = usePathname()
+
+  const items = NAV_ITEMS.filter((item) =>
+    item.module === 'settings'
+      ? allowed.settings || allowed.automation
+      : allowed[item.module]
+  )
 
   return (
     <nav className="flex flex-col gap-0.5">
-      {NAV_ITEMS.map((item) => {
+      {items.map((item) => {
         const active =
           pathname === item.href || pathname.startsWith(item.href + '/')
         return (

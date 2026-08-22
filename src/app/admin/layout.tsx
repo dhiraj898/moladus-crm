@@ -1,49 +1,36 @@
-import { createServerClient } from '@supabase/ssr'
-import { cookies } from 'next/headers'
+import { getCurrentUserWithRole } from '@/features/rbac/permissions'
+import { can, MODULE_ORDER } from '@/features/rbac/can'
+import type { ModuleKey } from '@/lib/supabase/types'
 import AdminNav from './AdminNav'
 import SignOutButton from './SignOutButton'
 
 /**
- * Read the current admin user inside a Server Component.
- *
- * Uses the anon key + request cookies. Cookie writes (token refresh) are not
- * permitted in a Server Component render, so `setAll` is a no-op here — the
- * middleware owns cookie refresh on every `/admin/*` request.
+ * Admin shell (plan Task 6.2). Resolves the current session together with its
+ * role/permissions via the service-role resolver (`getCurrentUserWithRole`),
+ * then hands `AdminNav` a per-module `view` map so the sidebar only lists
+ * sections the role can actually open. The middleware only lets unauthenticated
+ * requests reach `/admin/login`, so a null ctx means the login page — render it
+ * without the admin shell.
  */
-async function getUser() {
-  const cookieStore = await cookies()
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return cookieStore.getAll()
-        },
-        setAll() {
-          // No-op: cookies are read-only in a Server Component render.
-        },
-      },
-    }
-  )
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  return user
-}
-
 export default async function AdminLayout({
   children,
 }: {
   children: React.ReactNode
 }) {
-  const user = await getUser()
+  const ctx = await getCurrentUserWithRole()
 
-  // The middleware only lets unauthenticated requests reach `/admin/login`,
-  // so no user here means the login page — render it without the admin shell.
-  if (!user) {
+  if (!ctx) {
     return <>{children}</>
   }
+
+  const { user, permissions } = ctx
+  const allowed = MODULE_ORDER.reduce(
+    (acc, module) => {
+      acc[module] = can(permissions, module, 'view')
+      return acc
+    },
+    {} as Record<ModuleKey, boolean>
+  )
 
   return (
     <div className="flex min-h-screen">
@@ -56,7 +43,7 @@ export default async function AdminLayout({
             <p className="mt-1 text-sm font-semibold text-text">Admin</p>
           </div>
           <div className="mt-6">
-            <AdminNav />
+            <AdminNav allowed={allowed} />
           </div>
         </div>
 

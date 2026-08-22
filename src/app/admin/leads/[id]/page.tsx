@@ -6,6 +6,9 @@ import { formatMoney } from '@/features/form-engine/estimate'
 import PaymentStatusChip from '@/features/records/PaymentStatusChip'
 import ActivityTimeline from '@/features/crm/ActivityTimeline'
 import { requireModuleView } from '@/features/rbac/guard'
+import { can } from '@/features/rbac/can'
+import { listAssignableUsers } from '@/features/rbac/queries'
+import AssignControl from './AssignControl'
 
 /**
  * Lead detail (spec §6 — Lead detail). Server component: loads the lead, its
@@ -119,6 +122,10 @@ export default async function LeadDetailPage({
   const { lead, owner_email, contact, deals } = detail
   const activity = await getActivityTimeline('lead', lead.id)
 
+  // Manual reassignment is offered only to roles that can edit leads.
+  const canEdit = can(ctx.permissions, 'leads', 'edit')
+  const assignableUsers = canEdit ? await listAssignableUsers() : []
+
   const utm = lead.utm && typeof lead.utm === 'object' ? lead.utm : null
 
   return (
@@ -160,6 +167,18 @@ export default async function LeadDetailPage({
             <Row label="Source">{lead.source ?? '—'}</Row>
             <Row label="Status">{lead.status ?? 'new'}</Row>
             <Row label="Owner">{owner_email ?? '—'}</Row>
+            {canEdit ? (
+              <div className="flex items-center justify-between gap-4 border-b border-line py-2.5 last:border-b-0">
+                <dt className="text-sm text-dim">Assign</dt>
+                <dd>
+                  <AssignControl
+                    leadId={lead.id}
+                    currentOwnerId={lead.owner_id}
+                    users={assignableUsers}
+                  />
+                </dd>
+              </div>
+            ) : null}
             <Row label="Submitted">{formatDateTime(lead.created_at)}</Row>
           </dl>
         </Card>
