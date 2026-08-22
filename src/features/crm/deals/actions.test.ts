@@ -25,6 +25,29 @@ const stagesInMock = vi.fn()
 // deal_stage_events: insert.
 const eventInsertMock = vi.fn()
 
+// A full-permission Admin role (deals scope 'all'), returned by the profiles
+// lookup that `requirePermission` → `getCurrentUserWithRole` now performs. Scope
+// 'all' keeps the own-scope ownership guard inert for these tests.
+const ADMIN_ROLE = {
+  id: 'role-admin',
+  name: 'Admin',
+  permissions: {
+    products: { view: true, edit: true },
+    forms: { view: true, edit: true },
+    leads: { view: true, edit: true, scope: 'all' },
+    deals: { view: true, edit: true, scope: 'all' },
+    contacts: { view: true, edit: true },
+    settings: { view: true, edit: true },
+    automation: { view: true, edit: true },
+  },
+  in_assignment_pool: false,
+  is_system: true,
+  created_at: '2026-01-01T00:00:00Z',
+  updated_at: '2026-01-01T00:00:00Z',
+}
+// profiles: select→eq→maybeSingle (resolve the caller's role for requirePermission).
+const profileMaybeSingleMock = vi.fn()
+
 function dealsTable() {
   return {
     select: () => ({ eq: () => ({ maybeSingle: dealMaybeSingleMock }) }),
@@ -36,6 +59,8 @@ const fromMock = vi.fn((table: string) => {
   if (table === 'deals') return dealsTable()
   if (table === 'stages') return { select: () => ({ in: stagesInMock }) }
   if (table === 'deal_stage_events') return { insert: eventInsertMock }
+  if (table === 'profiles')
+    return { select: () => ({ eq: () => ({ maybeSingle: profileMaybeSingleMock }) }) }
   throw new Error(`unexpected table: ${table}`)
 })
 
@@ -91,6 +116,11 @@ beforeEach(() => {
   })
   dealUpdateEqMock.mockResolvedValue({ error: null })
   eventInsertMock.mockResolvedValue({ error: null })
+  // Default: the caller resolves to the full-permission Admin role.
+  profileMaybeSingleMock.mockResolvedValue({
+    data: { role_id: ADMIN_ROLE.id, role: ADMIN_ROLE },
+    error: null,
+  })
 })
 
 describe('changeDealStage (plan Task 4.1)', () => {

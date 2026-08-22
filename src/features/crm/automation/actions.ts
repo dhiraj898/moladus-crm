@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { getServiceClient } from '@/lib/supabase/server'
-import { getCurrentUser } from '@/lib/supabase/auth'
+import { requirePermission } from '@/features/rbac/permissions'
 import type { EntryRule, StageAction, SlaRule } from '@/lib/supabase/types'
 import {
   entryRuleSchema,
@@ -18,9 +18,10 @@ import {
  *
  * RLS is deny-all on every automation table, so the service-role client is the
  * only DB path and these actions are the effective authorization boundary: each
- * mutating action asserts an admin session via `getCurrentUser()` before it
- * touches the DB (see `src/lib/supabase/auth.ts`). Every write revalidates the
- * Automation settings page. Mirrors the Stages actions module.
+ * mutating action asserts `requirePermission('automation', 'edit')` before it
+ * touches the DB (which internally calls `getCurrentUser()` — authentication —
+ * then checks the `automation.edit` capability — authorization). Every write
+ * revalidates the Automation settings page. Mirrors the Stages actions module.
  */
 
 const AUTOMATION_PATH = '/admin/settings/automation'
@@ -29,9 +30,6 @@ const AUTOMATION_PATH = '/admin/settings/automation'
 export type ActionResult<T> =
   | { ok: true; data: T }
   | { ok: false; error: string; fieldErrors?: Record<string, string[]> }
-
-/** Error returned when a mutation is attempted without an admin session. */
-const UNAUTHENTICATED = 'You must be signed in to do that.'
 
 const VALIDATION_ERROR = 'Please correct the highlighted fields.'
 
@@ -51,8 +49,8 @@ const VALIDATION_ERROR = 'Please correct the highlighted fields.'
 export async function createEntryRule(
   input: EntryRuleInputRaw
 ): Promise<ActionResult<EntryRule>> {
-  const user = await getCurrentUser()
-  if (!user) return { ok: false, error: UNAUTHENTICATED }
+  const gate = await requirePermission('automation', 'edit')
+  if (!gate.ok) return { ok: false, error: gate.error }
 
   const parsed = entryRuleSchema.safeParse(input)
   if (!parsed.success) {
@@ -141,8 +139,8 @@ export async function updateEntryRule(
   id: string,
   input: EntryRuleInputRaw
 ): Promise<ActionResult<EntryRule>> {
-  const user = await getCurrentUser()
-  if (!user) return { ok: false, error: UNAUTHENTICATED }
+  const gate = await requirePermission('automation', 'edit')
+  if (!gate.ok) return { ok: false, error: gate.error }
 
   const parsed = entryRuleSchema.safeParse(input)
   if (!parsed.success) {
@@ -185,8 +183,8 @@ export async function updateEntryRule(
 export async function reorderEntryRules(
   orderedIds: string[]
 ): Promise<ActionResult<void>> {
-  const user = await getCurrentUser()
-  if (!user) return { ok: false, error: UNAUTHENTICATED }
+  const gate = await requirePermission('automation', 'edit')
+  if (!gate.ok) return { ok: false, error: gate.error }
 
   const supabase = getServiceClient()
   const now = new Date().toISOString()
@@ -210,8 +208,8 @@ export async function reorderEntryRules(
 
 /** Delete an entry rule. */
 export async function deleteEntryRule(id: string): Promise<ActionResult<void>> {
-  const user = await getCurrentUser()
-  if (!user) return { ok: false, error: UNAUTHENTICATED }
+  const gate = await requirePermission('automation', 'edit')
+  if (!gate.ok) return { ok: false, error: gate.error }
 
   const supabase = getServiceClient()
   const { error } = await supabase.from('entry_rules').delete().eq('id', id)
@@ -235,8 +233,8 @@ export async function deleteEntryRule(id: string): Promise<ActionResult<void>> {
 export async function createStageAction(
   input: StageActionInputRaw
 ): Promise<ActionResult<StageAction>> {
-  const user = await getCurrentUser()
-  if (!user) return { ok: false, error: UNAUTHENTICATED }
+  const gate = await requirePermission('automation', 'edit')
+  if (!gate.ok) return { ok: false, error: gate.error }
 
   const parsed = stageActionSchema.safeParse(input)
   if (!parsed.success) {
@@ -295,8 +293,8 @@ export async function updateStageAction(
   id: string,
   input: StageActionInputRaw
 ): Promise<ActionResult<StageAction>> {
-  const user = await getCurrentUser()
-  if (!user) return { ok: false, error: UNAUTHENTICATED }
+  const gate = await requirePermission('automation', 'edit')
+  if (!gate.ok) return { ok: false, error: gate.error }
 
   const parsed = stageActionSchema.safeParse(input)
   if (!parsed.success) {
@@ -342,8 +340,8 @@ export async function updateStageAction(
 export async function reorderStageActions(
   orderedIds: string[]
 ): Promise<ActionResult<void>> {
-  const user = await getCurrentUser()
-  if (!user) return { ok: false, error: UNAUTHENTICATED }
+  const gate = await requirePermission('automation', 'edit')
+  if (!gate.ok) return { ok: false, error: gate.error }
 
   const supabase = getServiceClient()
 
@@ -368,8 +366,8 @@ export async function reorderStageActions(
 export async function deleteStageAction(
   id: string
 ): Promise<ActionResult<void>> {
-  const user = await getCurrentUser()
-  if (!user) return { ok: false, error: UNAUTHENTICATED }
+  const gate = await requirePermission('automation', 'edit')
+  if (!gate.ok) return { ok: false, error: gate.error }
 
   const supabase = getServiceClient()
   const { error } = await supabase.from('stage_actions').delete().eq('id', id)
@@ -424,8 +422,8 @@ async function verifyMoveStageTarget(
 export async function createSlaRule(
   input: SlaRuleInputRaw
 ): Promise<ActionResult<SlaRule>> {
-  const user = await getCurrentUser()
-  if (!user) return { ok: false, error: UNAUTHENTICATED }
+  const gate = await requirePermission('automation', 'edit')
+  if (!gate.ok) return { ok: false, error: gate.error }
 
   const parsed = slaRuleSchema.safeParse(input)
   if (!parsed.success) {
@@ -471,8 +469,8 @@ export async function updateSlaRule(
   id: string,
   input: SlaRuleInputRaw
 ): Promise<ActionResult<SlaRule>> {
-  const user = await getCurrentUser()
-  if (!user) return { ok: false, error: UNAUTHENTICATED }
+  const gate = await requirePermission('automation', 'edit')
+  if (!gate.ok) return { ok: false, error: gate.error }
 
   const parsed = slaRuleSchema.safeParse(input)
   if (!parsed.success) {
@@ -518,8 +516,8 @@ export async function updateSlaRule(
 
 /** Delete an SLA rule. */
 export async function deleteSlaRule(id: string): Promise<ActionResult<void>> {
-  const user = await getCurrentUser()
-  if (!user) return { ok: false, error: UNAUTHENTICATED }
+  const gate = await requirePermission('automation', 'edit')
+  if (!gate.ok) return { ok: false, error: gate.error }
 
   const supabase = getServiceClient()
   const { error } = await supabase.from('sla_rules').delete().eq('id', id)
@@ -536,8 +534,8 @@ export async function toggleSlaRule(
   id: string,
   active: boolean
 ): Promise<ActionResult<SlaRule>> {
-  const user = await getCurrentUser()
-  if (!user) return { ok: false, error: UNAUTHENTICATED }
+  const gate = await requirePermission('automation', 'edit')
+  if (!gate.ok) return { ok: false, error: gate.error }
 
   const supabase = getServiceClient()
   const { data, error } = await supabase

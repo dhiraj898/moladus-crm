@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { getServiceClient } from '@/lib/supabase/server'
-import { getCurrentUser } from '@/lib/supabase/auth'
+import { requirePermission } from '@/features/rbac/permissions'
 import type { Form, FormField } from '@/lib/supabase/types'
 import { getFormWithFields } from './queries'
 import {
@@ -15,9 +15,12 @@ import {
 /**
  * Server actions for form + field configuration (spec §4 — Forms, FormFields).
  *
- * All DB access goes through the server-only service-role client. RLS is
- * deny-all, so these actions are the only path to the `forms` / `form_fields`
- * tables. Every write revalidates the affected admin route(s).
+ * All DB access goes through the server-only service-role client (RLS is
+ * deny-all), so these actions are the only path to the `forms` / `form_fields`
+ * tables. Every mutating action asserts `requirePermission('forms', 'edit')`
+ * first (which internally calls `getCurrentUser()` — authentication — then
+ * checks the `forms.edit` capability — authorization). Every write revalidates
+ * the affected admin route(s).
  */
 
 /** Discriminated result returned by mutating actions. */
@@ -27,12 +30,6 @@ export type ActionResult<T> =
 
 /** Postgres unique-violation error code. */
 const UNIQUE_VIOLATION = '23505'
-
-/** Standard failure returned by a mutating action invoked without a session. */
-const UNAUTHORIZED = {
-  ok: false as const,
-  error: 'You must be signed in to perform this action.',
-}
 
 // ---------------------------------------------------------------------------
 // Forms
@@ -51,7 +48,8 @@ const UNAUTHORIZED = {
 export async function createForm(
   input: FormInputRaw
 ): Promise<ActionResult<Form>> {
-  if (!(await getCurrentUser())) return UNAUTHORIZED
+  const gate = await requirePermission('forms', 'edit')
+  if (!gate.ok) return { ok: false, error: gate.error }
 
   const parsed = formSchema.safeParse(input)
   if (!parsed.success) {
@@ -94,7 +92,8 @@ export async function updateForm(
   id: string,
   input: FormInputRaw
 ): Promise<ActionResult<Form>> {
-  if (!(await getCurrentUser())) return UNAUTHORIZED
+  const gate = await requirePermission('forms', 'edit')
+  if (!gate.ok) return { ok: false, error: gate.error }
 
   const parsed = formSchema.safeParse(input)
   if (!parsed.success) {
@@ -134,7 +133,8 @@ export async function updateForm(
  * active product bound (spec §5 / plan Task 5.1 Step 2).
  */
 export async function publishForm(id: string): Promise<ActionResult<Form>> {
-  if (!(await getCurrentUser())) return UNAUTHORIZED
+  const gate = await requirePermission('forms', 'edit')
+  if (!gate.ok) return { ok: false, error: gate.error }
 
   const loaded = await getFormWithFields(id)
   if (!loaded) return { ok: false, error: 'Form not found.' }
@@ -181,7 +181,8 @@ export async function publishForm(id: string): Promise<ActionResult<Form>> {
  * status transitions stay funnelled through these two guarded actions.
  */
 export async function unpublishForm(id: string): Promise<ActionResult<Form>> {
-  if (!(await getCurrentUser())) return UNAUTHORIZED
+  const gate = await requirePermission('forms', 'edit')
+  if (!gate.ok) return { ok: false, error: gate.error }
 
   const supabase = getServiceClient()
   const { data, error } = await supabase
@@ -213,7 +214,8 @@ export async function upsertField(
   formId: string,
   input: FieldInputRaw & { id?: string }
 ): Promise<ActionResult<FormField>> {
-  if (!(await getCurrentUser())) return UNAUTHORIZED
+  const gate = await requirePermission('forms', 'edit')
+  if (!gate.ok) return { ok: false, error: gate.error }
 
   const { id, ...rest } = input
   const parsed = fieldSchema.safeParse(rest)
@@ -293,7 +295,8 @@ export async function upsertField(
 export async function deleteField(
   id: string
 ): Promise<ActionResult<{ id: string; form_id: string | null }>> {
-  if (!(await getCurrentUser())) return UNAUTHORIZED
+  const gate = await requirePermission('forms', 'edit')
+  if (!gate.ok) return { ok: false, error: gate.error }
 
   const supabase = getServiceClient()
   const { data, error } = await supabase
@@ -326,7 +329,8 @@ export async function reorderFields(
   formId: string,
   orderedIds: string[]
 ): Promise<ActionResult<{ count: number }>> {
-  if (!(await getCurrentUser())) return UNAUTHORIZED
+  const gate = await requirePermission('forms', 'edit')
+  if (!gate.ok) return { ok: false, error: gate.error }
 
   const supabase = getServiceClient()
 
