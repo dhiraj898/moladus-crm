@@ -37,6 +37,57 @@ export async function listForms(): Promise<FormListItem[]> {
   return (data ?? []) as unknown as FormListItem[]
 }
 
+/**
+ * Fetch a PUBLISHED form by its public slug, with ordered fields and bound
+ * product, for the public `/f/[slug]` page. Returns `null` for a missing or
+ * draft form so the route can `notFound()`.
+ *
+ * Uses the service-role client server-side only (RLS is deny-all); the field
+ * definitions are rendered into the SSR page, never fetched from the browser.
+ */
+export async function getPublishedFormBySlug(
+  slug: string
+): Promise<FormWithFields | null> {
+  const supabase = getServiceClient()
+
+  const { data: form, error: formError } = await supabase
+    .from('forms')
+    .select('*')
+    .eq('slug', slug)
+    .eq('status', 'published')
+    .maybeSingle()
+
+  if (formError) throw new Error(`Failed to load form: ${formError.message}`)
+  if (!form) return null
+
+  const { data: fields, error: fieldsError } = await supabase
+    .from('form_fields')
+    .select('*')
+    .eq('form_id', (form as Form).id)
+    .order('display_order', { ascending: true })
+
+  if (fieldsError)
+    throw new Error(`Failed to load fields: ${fieldsError.message}`)
+
+  let product: Product | null = null
+  if ((form as Form).product_id) {
+    const { data: productRow, error: productError } = await supabase
+      .from('products')
+      .select('*')
+      .eq('id', (form as Form).product_id as string)
+      .maybeSingle()
+    if (productError)
+      throw new Error(`Failed to load product: ${productError.message}`)
+    product = (productRow as Product | null) ?? null
+  }
+
+  return {
+    form: form as Form,
+    fields: (fields ?? []) as FormField[],
+    product,
+  }
+}
+
 /** Fetch a form with its ordered fields and bound product, or `null`. */
 export async function getFormWithFields(
   id: string
