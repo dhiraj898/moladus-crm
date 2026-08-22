@@ -58,6 +58,15 @@ vi.mock('@/features/razorpay/paymentLink', () => ({
   createPaymentLink: vi.fn(),
 }))
 
+// `changeDealStage` now runs the destination stage's on-enter actions. The
+// runner is server-only (Razorpay/AiSensy/Supabase); mock it so importing the
+// module under test stays free of `server-only`, and expose the spy so we can
+// assert the stage change dispatches the on-enter actions.
+const runStageActionsMock = vi.fn()
+vi.mock('@/features/crm/automation/runActions', () => ({
+  runStageActions: (...args: unknown[]) => runStageActionsMock(...args),
+}))
+
 vi.mock('next/cache', () => ({
   revalidatePath: (...args: unknown[]) => revalidatePathMock(...args),
 }))
@@ -92,6 +101,7 @@ describe('changeDealStage (plan Task 4.1)', () => {
 
     expect(result.ok).toBe(false)
     expect(fromMock).not.toHaveBeenCalled()
+    expect(runStageActionsMock).not.toHaveBeenCalled()
   })
 
   it('updates the deal stage, appends one stage event, and logs the change', async () => {
@@ -122,6 +132,9 @@ describe('changeDealStage (plan Task 4.1)', () => {
       metadata: { from: 'New', to: 'Enrolled' },
     })
 
+    // (d) the destination stage's on-enter actions are dispatched.
+    expect(runStageActionsMock).toHaveBeenCalledWith('deal-1', 'stage-to')
+
     expect(revalidatePathMock).toHaveBeenCalledWith('/admin/deals/deal-1')
   })
 
@@ -137,6 +150,7 @@ describe('changeDealStage (plan Task 4.1)', () => {
     expect(result.ok).toBe(false)
     expect(dealUpdateMock).not.toHaveBeenCalled()
     expect(eventInsertMock).not.toHaveBeenCalled()
+    expect(runStageActionsMock).not.toHaveBeenCalled()
   })
 
   it('errors when the deal does not exist', async () => {
@@ -147,5 +161,6 @@ describe('changeDealStage (plan Task 4.1)', () => {
 
     expect(result.ok).toBe(false)
     expect(dealUpdateMock).not.toHaveBeenCalled()
+    expect(runStageActionsMock).not.toHaveBeenCalled()
   })
 })

@@ -8,8 +8,9 @@ import { applyBindings, validateAnswers } from '@/features/ingest/bind'
 import { checkRateLimit } from '@/features/ingest/rateLimit'
 import { verifyCaptcha } from '@/features/ingest/captcha'
 import { computeGST } from '@/features/gst/compute'
-import { createPaymentLink } from '@/features/razorpay/paymentLink'
-import { sendEnrollmentLink } from '@/features/aisensy/send'
+import { resolveEntryStage } from '@/features/crm/automation/entry'
+import { runStageActions } from '@/features/crm/automation/runActions'
+import { logActivity } from '@/features/crm/activities/service'
 
 /**
  * Public submission pipeline (spec §6, steps 1–14).
@@ -74,71 +75,84 @@ function fail(error: string, status: number): NextResponse {
   return NextResponse.json({ success: false, error }, { status })
 }
 
-interface FinalizeParams {
-  dealId: string
-  /** GST-inclusive total in rupees. */
-  total: number
-  product: { id: string; name: string }
-  customerName: string
-  customerEmail?: string
-  whatsapp: string
-  formSlug: string
-  /** Display name for the WhatsApp notification. */
-  notifyName: string
+/**
+ * Run the routed stage's on-enter actions for a deal, then return the success
+ * response. The payment link (if the entry stage has a `create_payment_link`
+ * on-enter action, e.g. the seeded "Payment Link Sent" stage) is minted inside
+ * `runStageActions`; we re-read it off the deal afterwards to hand back to the
+ * FormRunner. `payment_link` is `null` when the entry stage minted no link —
+ * either the entry stage has no `create_payment_link` action, or it has one that
+ * failed (e.g. a Razorpay outage; `runStageActions` is best-effort and never
+ * throws, so the deal is left open+unlinked and resumable by a later
+ * submission). NOTE: the current FormRunner (`src/app/f/[slug]/FormRunner.tsx`)
+ * treats a `null` payment_link as a submit error and shows "Something went
+ * wrong", so a success-without-link response is NOT yet supported end-to-end.
+ * A link-less entry route (e.g. "Call Requested") therefore needs a FormRunner
+ * change to show a "we'll be in touch" confirmation before it can be used.
+ */
+async function runActionsAndRespond(
+  supabase: ReturnType<typeof getServiceClient>,
+  dealId: string,
+  stageId: string
+): Promise<NextResponse> {
+  await runStageActions(dealId, stageId)
+
+  const { data } = await supabase
+    .from('deals')
+    .select('razorpay_payment_link_url')
+    .eq('id', dealId)
+    .maybeSingle()
+  const url =
+    (data as Pick<Deal, 'razorpay_payment_link_url'> | null)
+      ?.razorpay_payment_link_url ?? null
+
+  return NextResponse.json({ success: true, payment_link: url })
 }
 
 /**
- * Steps 7–9: create the Razorpay payment link for a deal, persist it, advance
- * the deal to `link_sent`, fire the enrollment WhatsApp, and return the success
- * response. On a Razorpay outage this returns a 502 WITHOUT mutating the deal,
- * so the deal stays open+unlinked and a later submission resumes it (rather than
- * bricking the contact+product on a permanent 500). Notification failure is
- * swallowed inside the sender and never fatal.
+ * Resume an existing OPEN deal that has no payment link yet (a prior attempt
+ * created the deal but its on-enter link action never landed — e.g. a Razorpay
+ * outage). Re-routes it via the current answers and re-runs the stage's on-enter
+ * actions; `create_payment_link` is idempotent, so it mints the missing link
+ * without double-charging an already-linked deal.
+ *
+ * The stage entry is re-stamped ONLY when the resolved stage actually differs
+ * from the deal's current stage. Re-stamping `stage_entered_at` on an unchanged
+ * stage would reset the SLA at-most-once dedup key (which keys on
+ * `(deal, rule, stage_entered_at)`), letting a reminder fire again, and would
+ * add a duplicate same-stage audit row — so a same-stage resume just re-runs the
+ * on-enter actions.
  */
-async function finalizeDeal(
+async function resumeOpenDeal(
   supabase: ReturnType<typeof getServiceClient>,
-  env: ReturnType<typeof getEnv>,
-  params: FinalizeParams
+  dealId: string,
+  answers: AnswersMap
 ): Promise<NextResponse> {
-  let paymentLink: { id: string; short_url: string }
-  try {
-    paymentLink = await createPaymentLink({
-      amountPaise: Math.round(params.total * 100),
-      description: params.product.name,
-      customer: {
-        name: params.customerName,
-        email: params.customerEmail,
-        contact: params.whatsapp,
-      },
-      callbackUrl: `${env.NEXT_PUBLIC_APP_URL}/f/${params.formSlug}/thank-you`,
-      referenceId: params.dealId,
-      notes: { deal_id: params.dealId, product_id: params.product.id },
+  const stageId = await resolveEntryStage(answers)
+
+  const { data: dealRow } = await supabase
+    .from('deals')
+    .select('stage_id')
+    .eq('id', dealId)
+    .maybeSingle()
+  const currentStageId =
+    (dealRow as Pick<Deal, 'stage_id'> | null)?.stage_id ?? null
+
+  if (currentStageId !== stageId) {
+    const now = new Date().toISOString()
+    await supabase
+      .from('deals')
+      .update({ stage_id: stageId, stage_entered_at: now, updated_at: now })
+      .eq('id', dealId)
+    await supabase.from('deal_stage_events').insert({
+      deal_id: dealId,
+      stage_id: stageId,
+      actor_id: null,
+      entered_at: now,
     })
-  } catch {
-    return fail('Could not start payment. Please try again shortly.', 502)
   }
 
-  // Persist the link on the deal and advance to link_sent.
-  await supabase
-    .from('deals')
-    .update({
-      razorpay_payment_link_id: paymentLink.id,
-      razorpay_payment_link_url: paymentLink.short_url,
-      payment_status: 'link_sent',
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', params.dealId)
-
-  // Fire the enrollment-link WhatsApp. Failure is logged inside the sender
-  // (notification_log) and is NEVER fatal to the submission.
-  await sendEnrollmentLink({
-    dealId: params.dealId,
-    name: params.notifyName,
-    whatsapp: params.whatsapp,
-    paymentLink: paymentLink.short_url,
-  })
-
-  return NextResponse.json({ success: true, payment_link: paymentLink.short_url })
+  return runActionsAndRespond(supabase, dealId, stageId)
 }
 
 interface OpenDeal {
@@ -257,18 +271,8 @@ export async function POST(req: Request): Promise<Response> {
       return NextResponse.json({ success: true, payment_link: openDeal.url })
     }
     if (openDeal) {
-      // Open deal exists but was never linked — resume payment for it.
-      const gst = computeGST(product, boundLead.state ?? '')
-      return finalizeDeal(supabase, env, {
-        dealId: openDeal.id,
-        total: gst.total,
-        product,
-        customerName: boundContact.name ?? 'Student',
-        customerEmail: boundContact.email ?? undefined,
-        whatsapp,
-        formSlug: form.slug,
-        notifyName: boundContact.name ?? 'there',
-      })
+      // Open deal exists but was never linked — resume its on-enter actions.
+      return resumeOpenDeal(supabase, openDeal.id, answers)
     }
   }
 
@@ -327,15 +331,13 @@ export async function POST(req: Request): Promise<Response> {
   const customerState = boundLead.state ?? ''
   const gst = computeGST(product, customerState)
 
-  // 6d. Resolve the default pipeline stage. New deals enter the CRM at the
-  // default stage (`is_default`); `deals.stage_id` is nullable with no DB
-  // default, so it must be set explicitly here.
-  const { data: defaultStageRow } = await supabase
-    .from('stages')
-    .select('id')
-    .eq('is_default', true)
-    .maybeSingle()
-  const defaultStageId = (defaultStageRow as { id: string } | null)?.id ?? null
+  // 6d. Resolve the ENTRY stage from the submission's answers via the
+  // configured entry rules (falling back to `stages.is_default` when no rule
+  // matches). `deals.stage_id` is nullable with no DB default, so it must be set
+  // explicitly here. The seeded default rule routes to "Payment Link Sent",
+  // whose on-enter actions (create link + WhatsApp) reproduce v1 behaviour.
+  const stageId = await resolveEntryStage(answers)
+  const now = new Date().toISOString()
 
   // 6e. Insert Deal. The partial unique index `deals_open_dedupe` guards against
   // a race: two concurrent submissions can both pass the step-5 check, but only
@@ -354,8 +356,8 @@ export async function POST(req: Request): Promise<Response> {
       igst: gst.igst,
       total_amount: gst.total,
       place_of_supply: boundLead.state ?? null,
-      stage_id: defaultStageId,
-      stage_entered_at: new Date().toISOString(),
+      stage_id: stageId,
+      stage_entered_at: now,
       payment_status: 'pending',
     })
     .select('id')
@@ -371,36 +373,29 @@ export async function POST(req: Request): Promise<Response> {
         return NextResponse.json({ success: true, payment_link: openDeal.url })
       }
       if (openDeal) {
-        // Deal exists but was never linked (prior Razorpay outage) — resume it
-        // instead of permanently 500-ing this contact+product.
-        return finalizeDeal(supabase, env, {
-          dealId: openDeal.id,
-          total: gst.total,
-          product,
-          customerName: contact.name ?? boundContact.name ?? 'Student',
-          customerEmail: contact.email ?? boundContact.email ?? undefined,
-          whatsapp,
-          formSlug: form.slug,
-          notifyName: contact.name ?? boundContact.name ?? 'there',
-        })
+        // Deal exists but was never linked (prior outage) — resume its on-enter
+        // actions instead of permanently 500-ing this contact+product.
+        return resumeOpenDeal(supabase, openDeal.id, answers)
       }
     }
     return fail('Could not create your enrollment. Please try again.', 500)
   }
   const dealId = (dealRow as Pick<Deal, 'id'>).id
 
-  // 7–9. Create the Razorpay payment link for the GST-inclusive total, persist
-  // it, advance the deal, notify, and return.
-  return finalizeDeal(supabase, env, {
-    dealId,
-    total: gst.total,
-    product,
-    customerName: contact.name ?? boundContact.name ?? 'Student',
-    customerEmail: contact.email ?? boundContact.email ?? undefined,
-    whatsapp,
-    formSlug: form.slug,
-    notifyName: contact.name ?? boundContact.name ?? 'there',
+  // 6f. Opening stage event (audit trail; system actor) + `created` timeline
+  // entry, mirroring the manual create-deal path.
+  await supabase.from('deal_stage_events').insert({
+    deal_id: dealId,
+    stage_id: stageId,
+    actor_id: null,
+    entered_at: now,
   })
+  await logActivity('deal', dealId, 'created')
+
+  // 7–9. Run the entry stage's on-enter actions (which, for the seeded Payment
+  // Link Sent stage, mint the Razorpay link + send the enrollment WhatsApp),
+  // then return the payment link (or null when the route has no link action).
+  return runActionsAndRespond(supabase, dealId, stageId)
 }
 
 /*

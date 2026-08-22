@@ -86,17 +86,22 @@ async function logNotification(
   })
 }
 
-export async function sendEnrollmentLink(input: {
+/**
+ * Generic logged template send, for the data-driven on-enter action runner
+ * (`runStageActions`). Sends an arbitrary approved AiSensy template with the
+ * caller-built param list, then writes the same `notification_log` +
+ * `notification` activity trail as the typed wrappers below. Best-effort: it
+ * returns `{ ok }` and never throws, so a notification failure can never break
+ * the stage transition that triggered it.
+ */
+export async function sendWhatsAppTemplate(input: {
   dealId: string
-  name: string
+  template: string
   whatsapp: string
-  paymentLink: string
+  params: string[]
 }): Promise<SendResult> {
-  const { ok, error } = await sendTemplate('enrollment_link', input.whatsapp, [
-    input.name,
-    input.paymentLink,
-  ])
-  await logNotification(input.dealId, 'enrollment_link', ok, error)
+  const { ok, error } = await sendTemplate(input.template, input.whatsapp, input.params)
+  await logNotification(input.dealId, input.template, ok, error)
   return { ok }
 }
 

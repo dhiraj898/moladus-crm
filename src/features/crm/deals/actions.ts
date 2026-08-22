@@ -7,6 +7,7 @@ import { getEnv } from '@/lib/env'
 import { computeGST, type GSTBreakdown } from '@/features/gst/compute'
 import { createPaymentLink } from '@/features/razorpay/paymentLink'
 import { logActivity } from '@/features/crm/activities/service'
+import { runStageActions } from '@/features/crm/automation/runActions'
 import type { Contact, Product } from '@/lib/supabase/types'
 import {
   createDealSchema,
@@ -129,6 +130,11 @@ export async function changeDealStage(
     actorId: user.id,
     metadata: { from: fromName, to: toName },
   })
+
+  // Run the destination stage's on-enter actions (send WhatsApp / create
+  // payment link). Best-effort — `runStageActions` never throws — so a failing
+  // action can never undo a stage change that already committed.
+  await runStageActions(dealId, stageId)
 
   revalidatePath(`/admin/deals/${dealId}`)
   return { ok: true, data: undefined }
