@@ -1,6 +1,7 @@
 import 'server-only'
 import { getEnv } from '@/lib/env'
 import { getServiceClient } from '@/lib/supabase/server'
+import { logActivity } from '@/features/crm/activities/service'
 
 /**
  * AiSensy transactional WhatsApp sends (spec §9). Owned by Workstream 9.
@@ -61,19 +62,28 @@ async function logNotification(
   ok: boolean,
   error?: string,
 ): Promise<void> {
+  const status = ok ? 'sent' : 'failed'
   try {
     const supabase = getServiceClient()
     await supabase.from('notification_log').insert({
       deal_id: dealId,
       channel: 'whatsapp',
       template,
-      status: ok ? 'sent' : 'failed',
+      status,
       sent_at: ok ? new Date().toISOString() : null,
       error_message: error ?? null,
     })
   } catch {
     // Logging must never throw to the caller.
   }
+
+  // Mirror the send onto the deal's activity timeline. `logActivity` is
+  // best-effort (it swallows every error), so this can never break the send
+  // pipeline or the webhook that ultimately called it.
+  await logActivity('deal', dealId, 'notification', {
+    body: template,
+    metadata: { status },
+  })
 }
 
 export async function sendEnrollmentLink(input: {

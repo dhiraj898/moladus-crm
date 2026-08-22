@@ -4,6 +4,7 @@ import { getEnv } from '@/lib/env'
 import { getServiceClient } from '@/lib/supabase/server'
 import { verifyRazorpaySignature } from '@/features/razorpay/verify'
 import { sendReceipt } from '@/features/aisensy/send'
+import { logActivity } from '@/features/crm/activities/service'
 
 /**
  * Razorpay webhook handler (spec §8, §11).
@@ -113,19 +114,42 @@ export async function POST(req: Request): Promise<Response> {
         update.razorpay_ref = paymentRef
       }
 
-      // Perform the update atomically at the DB level, gated so a deal that is
-      // already `paid` never transitions again. `select('id')` returns the rows
-      // that actually changed, so the paid→receipt side effect can be gated on a
-      // real transition rather than on having merely read a non-processed event.
-      // This keeps the receipt at-most-once under Razorpay retries (a delivery
-      // that updated + sent but crashed before marking processed) and under two
-      // concurrent deliveries of the same event (both read processed=false).
+      // Perform the update atomically at the DB level, gated on two conditions:
+      //  - `.neq('payment_status', 'paid')` so a deal that is already `paid`
+      //    never transitions away from it.
+      //  - `.neq('payment_status', newStatus)` so re-applying the same status is
+      //    a true no-op — the WHERE matches no row on a retry of an expired/
+      //    failed event, whereas an unconditional UPDATE would re-match the row
+      //    (and `select('id')` would return it) even though nothing changed.
+      // Together these make `transitioned` non-empty only on a genuine status
+      // change, for every status — not just `paid`. `select('id')` returns the
+      // rows that actually changed, so the transition-gated side effects below
+      // fire at-most-once under Razorpay retries (a delivery that updated but
+      // crashed before marking processed) and under two concurrent deliveries
+      // of the same event (both read processed=false).
       const { data: transitioned } = await supabase
         .from('deals')
         .update(update)
         .eq('id', deal.id)
         .neq('payment_status', 'paid')
+        .neq('payment_status', newStatus)
         .select('id')
+
+      // On a genuine transition (the gated update actually changed a row),
+      // record a `payment` activity on the deal's timeline. Because the update
+      // is now a no-op when the status is unchanged, `transitioned` is empty on
+      // a retry of any status, keeping this activity at-most-once under Razorpay
+      // retries and concurrent deliveries — not only for `paid`. `logActivity`
+      // is itself best-effort (it swallows every error), so a logging failure
+      // can never break the 200 ack.
+      if (transitioned && transitioned.length > 0) {
+        await logActivity('deal', deal.id, 'payment', {
+          metadata: {
+            status: newStatus,
+            razorpay_ref: paymentRef ?? null,
+          },
+        })
+      }
 
       // On a genuine transition to paid, enqueue the receipt WhatsApp. Never
       // fatal to the webhook.
