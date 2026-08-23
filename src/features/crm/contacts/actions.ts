@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache'
 import { getServiceClient } from '@/lib/supabase/server'
 import { requirePermission } from '@/features/rbac/permissions'
 import { logActivity } from '@/features/crm/activities/service'
+import { emitEvent } from '@/features/webhooks/emit'
 import { getActiveCustomFieldDefs } from '@/features/crm/custom-fields/queries'
 import {
   validateCustomFields,
@@ -110,6 +111,10 @@ export async function createContact(
   const id = (data as { id: string }).id
 
   await logActivity('contact', id, 'created', { actorId: ctx.user.id })
+
+  // Emit the outbound `contact.created` event (best-effort; `emitEvent` never
+  // throws, so a subscriber failure can never fail the create).
+  await emitEvent('contact.created', { contactId: id, whatsapp: whatsapp_number })
 
   revalidatePath('/admin/contacts')
   revalidatePath(`/admin/contacts/${id}`)

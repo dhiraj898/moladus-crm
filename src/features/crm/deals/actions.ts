@@ -9,6 +9,7 @@ import { computeGST, type GSTBreakdown } from '@/features/gst/compute'
 import { createPaymentLink } from '@/features/razorpay/paymentLink'
 import { logActivity } from '@/features/crm/activities/service'
 import { runStageActions } from '@/features/crm/automation/runActions'
+import { emitEvent } from '@/features/webhooks/emit'
 import { getActiveCustomFieldDefs } from '@/features/crm/custom-fields/queries'
 import {
   validateCustomFields,
@@ -150,6 +151,14 @@ export async function changeDealStage(
   // payment link). Best-effort — `runStageActions` never throws — so a failing
   // action can never undo a stage change that already committed.
   await runStageActions(dealId, stageId)
+
+  // Emit the outbound `deal.stage_changed` event (best-effort; `emitEvent`
+  // never throws, so a subscriber failure can never undo a committed move).
+  await emitEvent('deal.stage_changed', {
+    dealId,
+    from: fromName,
+    to: toName,
+  })
 
   revalidatePath(`/admin/deals/${dealId}`)
   return { ok: true, data: undefined }
