@@ -1,53 +1,39 @@
 import 'server-only'
+import { verifySolution } from 'altcha-lib/v1'
 import { getEnv } from '@/lib/env'
 
 /**
- * Server-side hCaptcha verification for the ingest endpoint (spec §6 step 2).
+ * Server-side Altcha verification for the ingest endpoint (spec §6 step 2).
  *
- * The public form renders the hCaptcha widget with the site key and posts the
- * resulting token to the ingest endpoint; we exchange it here for a pass/fail
- * against the hCaptcha siteverify API using the server-only `HCAPTCHA_SECRET`.
- * The secret NEVER reaches the browser (this module is `server-only`).
+ * The public form renders `<altcha-widget challengeurl="/api/altcha/challenge">`,
+ * which solves an HMAC-signed proof-of-work challenge and posts the base64
+ * payload as `captcha_token`. We re-verify it here against the same server-only
+ * `ALTCHA_HMAC_KEY` via `verifySolution` — stateless, no challenge store and no
+ * external service call. The key NEVER reaches the browser (this module is
+ * `server-only`; the widget needs only the challenge URL).
  *
- * Any missing token, non-2xx response, network error, or `success:false`
- * payload resolves to `false` — verification fails closed.
+ * `verifySolution(payload, key, true)` checks the HMAC signature (proving the
+ * challenge is one we issued), the proof-of-work number, and — with the third
+ * `checkExpires` arg `true` — the challenge's expiry. Any empty payload, tamper,
+ * wrong key, expiry, or parse error resolves to `false` — verification fails
+ * closed.
  *
- * ENV-PENDING: a live pass/fail requires `HCAPTCHA_SECRET` (and a matching
- * `NEXT_PUBLIC_HCAPTCHA_SITE_KEY` on the form). Manual test once keys exist:
- * submit the form with a solved challenge → 200; tamper the token or omit it →
- * ingest returns 400 "captcha verification failed".
+ * ENV-PENDING: a live pass/fail requires `ALTCHA_HMAC_KEY` set (and
+ * `NEXT_PUBLIC_CAPTCHA_ENABLED=true` to enforce). Manual test once set: load the
+ * form → the widget solves → submit → 200; tamper/omit `captcha_token` → ingest
+ * returns 400 "captcha verification failed".
  */
-
-const HCAPTCHA_VERIFY_URL = 'https://hcaptcha.com/siteverify'
-
-interface HCaptchaVerifyResponse {
-  success?: boolean
-}
 
 /**
- * Verify an hCaptcha token. Returns `true` only when hCaptcha confirms the
- * token; fails closed (`false`) on any error or empty token.
+ * Verify an Altcha proof-of-work payload. Returns `true` only when the solution
+ * verifies against `ALTCHA_HMAC_KEY`; fails closed (`false`) on any error or
+ * empty payload.
  */
-export async function verifyCaptcha(token: string | null | undefined): Promise<boolean> {
-  if (!token) return false
+export async function verifyCaptcha(payload: string | null | undefined): Promise<boolean> {
+  if (!payload) return false
 
   try {
-    const env = getEnv()
-    const body = new URLSearchParams({
-      secret: env.HCAPTCHA_SECRET,
-      response: token,
-    })
-
-    const res = await fetch(HCAPTCHA_VERIFY_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body,
-    })
-
-    if (!res.ok) return false
-
-    const data = (await res.json()) as HCaptchaVerifyResponse
-    return data.success === true
+    return await verifySolution(payload, getEnv().ALTCHA_HMAC_KEY, true)
   } catch {
     return false
   }

@@ -14,6 +14,8 @@
   "dependencies": {
     "@supabase/ssr": "^0.12.4",
     "@supabase/supabase-js": "^2.45.4",
+    "altcha": "^3.2.2",
+    "altcha-lib": "^2.3.2",
     "next": "15.5.23",
     "razorpay": "^2.9.4",
     "react": "^19.0.0",
