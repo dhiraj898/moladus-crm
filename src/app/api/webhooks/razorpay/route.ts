@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import type { PaymentStatus } from '@/lib/supabase/types'
-import { getEnv } from '@/lib/env'
+import { getSecret } from '@/features/integrations/secrets'
 import { getServiceClient } from '@/lib/supabase/server'
 import { verifyRazorpaySignature } from '@/features/razorpay/verify'
 import { sendReceipt } from '@/features/aisensy/send'
@@ -42,19 +42,18 @@ interface RazorpayWebhookBody {
 }
 
 export async function POST(req: Request): Promise<Response> {
-  const env = getEnv()
-
   // 0. Fail safe when the webhook secret is not configured yet (deploy-first,
-  //    set-secret-after window). RAZORPAY_WEBHOOK_SECRET is optional in env, so
-  //    getEnv() does not throw; the route refuses cleanly instead of crashing.
-  if (!env.RAZORPAY_WEBHOOK_SECRET) {
+  //    set-secret-after window). Resolve via getSecret (DB override, then env);
+  //    when neither has it the route refuses cleanly instead of crashing.
+  const secret = await getSecret('RAZORPAY_WEBHOOK_SECRET')
+  if (!secret) {
     return NextResponse.json({ error: 'webhook not configured' }, { status: 503 })
   }
 
   // 1. Verify signature over the RAW body.
   const rawBody = await req.text()
   const signature = req.headers.get('x-razorpay-signature')
-  if (!verifyRazorpaySignature(rawBody, signature, env.RAZORPAY_WEBHOOK_SECRET)) {
+  if (!verifyRazorpaySignature(rawBody, signature, secret)) {
     return NextResponse.json({ error: 'invalid signature' }, { status: 400 })
   }
 

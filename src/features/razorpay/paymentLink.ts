@@ -43,7 +43,7 @@ export interface PaymentLinkResult {
 export async function createPaymentLink(
   params: CreatePaymentLinkParams,
 ): Promise<PaymentLinkResult> {
-  const client = getRazorpayClient()
+  const client = await getRazorpayClient()
 
   const link = await client.paymentLink.create({
     amount: Math.round(params.amountPaise),
