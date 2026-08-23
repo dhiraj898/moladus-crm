@@ -1,5 +1,6 @@
 'use client'
 
+import 'altcha'
 import {
   useCallback,
   useEffect,
@@ -18,7 +19,7 @@ import type { Answer } from '@/features/form-engine/visibility'
  * - Enter advances; Backspace on an empty field goes back; Back button.
  * - Statement + Yes/No fields auto-advance.
  * - Conditional navigation: hidden fields are skipped (via `useFormNav`).
- * - hCaptcha widget on the final step; POSTs `{ form_id, answers,
+ * - Altcha proof-of-work widget on the final step; POSTs `{ form_id, answers,
  *   captcha_token }` to the ingest endpoint and redirects to the returned
  *   payment link.
  *
@@ -31,34 +32,9 @@ interface FormRunnerProps {
   fields: FormField[]
   welcomeMessage: string | null
   submitLabel: string
-  hcaptchaSiteKey: string
+  captchaEnabled: boolean
   ingestUrl: string
 }
-
-/** Minimal shape of the hCaptcha explicit-render API we use. */
-interface HCaptchaApi {
-  render: (
-    container: HTMLElement,
-    params: {
-      sitekey: string
-      theme?: string
-      callback?: (token: string) => void
-      'expired-callback'?: () => void
-      'error-callback'?: () => void
-    }
-  ) => string
-  reset: (widgetId?: string) => void
-}
-
-declare global {
-  interface Window {
-    hcaptcha?: HCaptchaApi
-    onHCaptchaLoad?: () => void
-  }
-}
-
-const HCAPTCHA_SRC =
-  'https://js.hcaptcha.com/1/api.js?render=explicit&onload=onHCaptchaLoad'
 
 /** True when a value counts as answered (for required validation). */
 function hasValue(value: Answer): boolean {
@@ -75,7 +51,7 @@ export default function FormRunner({
   fields,
   welcomeMessage,
   submitLabel,
-  hcaptchaSiteKey,
+  captchaEnabled,
   ingestUrl,
 }: FormRunnerProps) {
   const nav = useFormNav(fields)
@@ -101,7 +77,6 @@ export default function FormRunner({
 
   const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null)
   const captchaRef = useRef<HTMLDivElement | null>(null)
-  const captchaWidgetId = useRef<string | null>(null)
 
   // Clear the transient field error whenever the field changes.
   useEffect(() => {
@@ -113,37 +88,30 @@ export default function FormRunner({
     inputRef.current?.focus()
   }, [currentIndex])
 
-  // ---- hCaptcha (final step only) --------------------------------------
-  const captchaRequired = hcaptchaSiteKey.length > 0
+  // ---- Altcha proof-of-work (final step only) --------------------------
+  const captchaRequired = captchaEnabled
 
-  const renderCaptcha = useCallback(() => {
-    if (!captchaRequired || !window.hcaptcha || !captchaRef.current) return
-    if (captchaWidgetId.current) return // already rendered
-    captchaWidgetId.current = window.hcaptcha.render(captchaRef.current, {
-      sitekey: hcaptchaSiteKey,
-      theme: 'dark',
-      callback: (token: string) => setCaptchaToken(token),
-      'expired-callback': () => setCaptchaToken(null),
-      'error-callback': () => setCaptchaToken(null),
-    })
-  }, [captchaRequired, hcaptchaSiteKey])
-
-  // Load the hCaptcha script once, when the last step is reached.
+  // The `altcha` custom element (registered by `import 'altcha'`) fetches a
+  // challenge from `challengeurl`, solves it in a worker, and emits a bubbling
+  // `statechange` event carrying the base64 solution `payload` once verified.
+  // We capture that payload into `captchaToken` (and clear it on any non-
+  // verified state) so submit can gate on it and POST it as `captcha_token`.
   useEffect(() => {
-    if (!isLast || !captchaRequired) return
-    if (window.hcaptcha) {
-      renderCaptcha()
-      return
+    const container = captchaRef.current
+    if (!isLast || !captchaRequired || !container) return
+
+    const onStateChange = (event: Event) => {
+      const detail = (
+        event as CustomEvent<{ payload?: string; state?: string }>
+      ).detail
+      setCaptchaToken(
+        detail?.state === 'verified' && detail.payload ? detail.payload : null
+      )
     }
-    window.onHCaptchaLoad = renderCaptcha
-    if (!document.querySelector(`script[src="${HCAPTCHA_SRC}"]`)) {
-      const script = document.createElement('script')
-      script.src = HCAPTCHA_SRC
-      script.async = true
-      script.defer = true
-      document.head.appendChild(script)
-    }
-  }, [isLast, captchaRequired, renderCaptcha])
+
+    container.addEventListener('statechange', onStateChange)
+    return () => container.removeEventListener('statechange', onStateChange)
+  }, [isLast, captchaRequired])
 
   // ---- validation ------------------------------------------------------
   const validateCurrent = useCallback((): boolean => {
@@ -198,8 +166,9 @@ export default function FormRunner({
             'Something went wrong submitting your enrollment. Please try again.'
         )
         setSubmitting(false)
-        if (captchaRequired && captchaWidgetId.current && window.hcaptcha) {
-          window.hcaptcha.reset(captchaWidgetId.current)
+        if (captchaRequired) {
+          // Re-arm the widget so the used solution isn't replayed on retry.
+          captchaRef.current?.querySelector('altcha-widget')?.reset()
           setCaptchaToken(null)
         }
         return
@@ -339,9 +308,15 @@ export default function FormRunner({
             </p>
           ) : null}
 
-          {/* hCaptcha widget on the final step */}
+          {/* Altcha proof-of-work widget on the final step */}
           {isLast && captchaRequired ? (
-            <div ref={captchaRef} className="mt-6" />
+            <div ref={captchaRef} className="mt-6">
+              <altcha-widget
+                challengeurl="/api/altcha/challenge"
+                name="captcha_token"
+                theme="dark"
+              />
+            </div>
           ) : null}
 
           {submitError ? (

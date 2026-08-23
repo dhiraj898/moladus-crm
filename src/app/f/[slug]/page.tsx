@@ -14,8 +14,13 @@ import FormRunner from './FormRunner'
  */
 export const dynamic = 'force-dynamic'
 
-/** hCaptcha site key is public by design; safe to render into the page. */
-const HCAPTCHA_SITE_KEY = process.env.NEXT_PUBLIC_HCAPTCHA_SITE_KEY ?? ''
+/**
+ * Whether the Altcha proof-of-work widget is shown + enforced. Gated on the
+ * public flag (`NEXT_PUBLIC_*`, inlined at build) so it toggles without a site
+ * key; ingest enforces the same flag server-side. The HMAC secret stays
+ * server-only — the widget needs only the challenge URL.
+ */
+const CAPTCHA_ENABLED = process.env.NEXT_PUBLIC_CAPTCHA_ENABLED === 'true'
 
 /** Relative ingest endpoint the FormRunner POSTs to (Workstream 7). */
 const INGEST_URL = '/api/ingest'
@@ -80,7 +85,7 @@ export default async function PublicFormPage({
         fields={fields}
         welcomeMessage={form.welcome_message}
         submitLabel={form.submit_label ?? 'Submit'}
-        hcaptchaSiteKey={HCAPTCHA_SITE_KEY}
+        captchaEnabled={CAPTCHA_ENABLED}
         ingestUrl={INGEST_URL}
       />
     </main>
