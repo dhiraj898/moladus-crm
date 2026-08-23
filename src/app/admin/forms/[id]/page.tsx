@@ -6,6 +6,7 @@ import type { Product } from '@/lib/supabase/types'
 import FormMetaForm from '@/features/forms/FormMetaForm'
 import FieldConfigurator from '@/features/forms/FieldConfigurator'
 import CopyLinkButton from '@/features/forms/CopyLinkButton'
+import EmbedSnippet from '@/features/forms/EmbedSnippet'
 
 /**
  * Form builder (spec §10 — Form builder). Edits form metadata and manages the
@@ -61,6 +62,17 @@ export default async function FormBuilderPage({
       <section className="mb-12">
         <h2 className="mb-4 text-lg font-bold tracking-[-0.01em]">Details</h2>
         <FormMetaForm mode="edit" form={form} products={pickerProducts} />
+      </section>
+
+      <section className="mb-12">
+        <h2 className="mb-4 text-lg font-bold tracking-[-0.01em]">Embed</h2>
+        {form.status === 'published' ? (
+          <EmbedSnippet src={`${APP_URL}/f/${form.slug}`} title={form.name} />
+        ) : (
+          <p className="text-sm text-dim">
+            Publish this form to get an embeddable iframe snippet.
+          </p>
+        )}
       </section>
 
       <section>
