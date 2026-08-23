@@ -354,3 +354,76 @@ export async function assignUserRole(
   revalidatePath(USERS_PATH)
   return { ok: true, data: undefined }
 }
+
+/**
+ * Invite a new admin user by email (spec: in-app team provisioning). Requires
+ * `settings.edit`. Creates the Supabase Auth user via the admin invite API,
+ * which emails them a set-password link — NO password is ever handled, stored,
+ * or shown in this app. When `roleId` is provided, the invited user's role is
+ * assigned immediately by upserting their `profiles` row. Idempotent-ish:
+ * inviting an existing email returns a friendly error rather than duplicating.
+ */
+export async function inviteUser(input: {
+  email: string
+  roleId: string | null
+}): Promise<ActionResult<{ userId: string }>> {
+  const gate = await requirePermission('settings', 'edit')
+  if (!gate.ok) return { ok: false, error: gate.error }
+
+  const email = input.email.trim().toLowerCase()
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return {
+      ok: false,
+      error: 'Enter a valid email address.',
+      fieldErrors: { email: ['Enter a valid email address.'] },
+    }
+  }
+
+  const supabase = getServiceClient()
+  const { data, error } = await supabase.auth.admin.inviteUserByEmail(email)
+
+  if (error) {
+    const msg = error.message.toLowerCase()
+    if (msg.includes('already') || msg.includes('registered') || msg.includes('exist')) {
+      return { ok: false, error: 'A user with this email already exists.' }
+    }
+    if (msg.includes('smtp') || msg.includes('email') || msg.includes('send')) {
+      return {
+        ok: false,
+        error: `Could not send the invite email — check Supabase email settings. (${error.message})`,
+      }
+    }
+    return { ok: false, error: `Could not invite user: ${error.message}` }
+  }
+
+  const userId = data.user?.id
+  if (!userId) {
+    return { ok: false, error: 'Invite succeeded but no user id was returned.' }
+  }
+
+  // Assign the chosen role immediately, if any.
+  if (input.roleId) {
+    const { error: roleError } = await supabase
+      .from('profiles')
+      .upsert(
+        {
+          user_id: userId,
+          role_id: input.roleId,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'user_id' }
+      )
+    if (roleError) {
+      // The user was invited; surface the role failure so the admin can retry
+      // the assignment from the table (the user now appears there).
+      revalidatePath(USERS_PATH)
+      return {
+        ok: false,
+        error: `User invited, but assigning the role failed: ${roleError.message}. Set their role from the list.`,
+      }
+    }
+  }
+
+  revalidatePath(USERS_PATH)
+  return { ok: true, data: { userId } }
+}

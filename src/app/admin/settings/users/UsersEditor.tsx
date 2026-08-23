@@ -4,7 +4,7 @@ import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import type { Role } from '@/lib/supabase/types'
 import type { AssignableUser } from '@/features/rbac/queries'
-import { assignUserRole } from '@/features/rbac/actions'
+import { assignUserRole, inviteUser } from '@/features/rbac/actions'
 
 /**
  * Users editor (spec §10.2 / plan Task 6.3). A row-border table of admin users
@@ -28,6 +28,37 @@ export default function UsersEditor({
   const [isPending, startTransition] = useTransition()
   const [error, setError] = useState<string | null>(null)
 
+  // Invite form state
+  const [inviteEmail, setInviteEmail] = useState('')
+  const [inviteRoleId, setInviteRoleId] = useState<string>(NO_ROLE)
+  const [inviteError, setInviteError] = useState<string | null>(null)
+  const [inviteNotice, setInviteNotice] = useState<string | null>(null)
+  const [isInviting, startInvite] = useTransition()
+
+  function handleInvite() {
+    setInviteError(null)
+    setInviteNotice(null)
+    const email = inviteEmail.trim()
+    if (!email) {
+      setInviteError('Enter an email address.')
+      return
+    }
+    startInvite(async () => {
+      const result = await inviteUser({
+        email,
+        roleId: inviteRoleId === NO_ROLE ? null : inviteRoleId,
+      })
+      if (!result.ok) {
+        setInviteError(result.error)
+        return
+      }
+      setInviteNotice(`Invite sent to ${email}.`)
+      setInviteEmail('')
+      setInviteRoleId(NO_ROLE)
+      router.refresh()
+    })
+  }
+
   function handleChange(userId: string, value: string) {
     setError(null)
     const roleId = value === NO_ROLE ? null : value
@@ -49,6 +80,64 @@ export default function UsersEditor({
           Map each admin user to a role. A user with no role has no access until
           one is assigned. The last administrator cannot be demoted.
         </p>
+      </div>
+
+      <div className="rounded-[12px] border border-line bg-surface p-5">
+        <h3 className="text-sm font-semibold text-text">Invite a user</h3>
+        <p className="mt-1 text-sm text-dim">
+          Sends a set-password link by email. They appear below once invited.
+        </p>
+        {inviteError ? (
+          <p role="alert" className="mt-3 text-sm text-red">
+            {inviteError}
+          </p>
+        ) : null}
+        {inviteNotice ? (
+          <p role="status" className="mt-3 text-sm text-green">
+            {inviteNotice}
+          </p>
+        ) : null}
+        <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
+          <label className="flex-1">
+            <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-dim">
+              Email
+            </span>
+            <input
+              type="email"
+              value={inviteEmail}
+              disabled={isInviting}
+              onChange={(e) => setInviteEmail(e.target.value)}
+              placeholder="teammate@example.com"
+              className="w-full rounded-[8px] border border-line bg-surface2 px-3 py-2 text-sm text-text outline-none transition-colors focus:border-accent disabled:opacity-60"
+            />
+          </label>
+          <label className="sm:w-52">
+            <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-dim">
+              Role
+            </span>
+            <select
+              value={inviteRoleId}
+              disabled={isInviting}
+              onChange={(e) => setInviteRoleId(e.target.value)}
+              className="w-full rounded-[8px] border border-line bg-surface2 px-3 py-2 text-sm text-text outline-none transition-colors focus:border-accent disabled:opacity-60"
+            >
+              <option value={NO_ROLE}>No role</option>
+              {roles.map((role) => (
+                <option key={role.id} value={role.id}>
+                  {role.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            onClick={handleInvite}
+            disabled={isInviting}
+            className="rounded-[8px] bg-accent px-4 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isInviting ? 'Inviting…' : 'Invite'}
+          </button>
+        </div>
       </div>
 
       {error ? (
