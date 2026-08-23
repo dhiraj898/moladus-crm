@@ -27,6 +27,7 @@ const SETTINGS_NAV: {
     label: 'Integrations',
     need: 'settings',
   },
+  { href: '/admin/settings/webhooks', label: 'Webhooks', need: 'settings' },
   { href: '/admin/settings/automation', label: 'Automation', need: 'automation' },
 ]
 

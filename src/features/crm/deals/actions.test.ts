@@ -92,6 +92,15 @@ vi.mock('@/features/crm/automation/runActions', () => ({
   runStageActions: (...args: unknown[]) => runStageActionsMock(...args),
 }))
 
+// `changeDealStage` now emits a `deal.stage_changed` outbound webhook event.
+// `emitEvent` is server-only (service-role client) and best-effort; mock it so
+// importing the module under test stays free of `server-only`, and expose the
+// spy to assert the stage change fires the event with the resolved from/to.
+const emitEventMock = vi.fn()
+vi.mock('@/features/webhooks/emit', () => ({
+  emitEvent: (...args: unknown[]) => emitEventMock(...args),
+}))
+
 vi.mock('next/cache', () => ({
   revalidatePath: (...args: unknown[]) => revalidatePathMock(...args),
 }))
@@ -164,6 +173,13 @@ describe('changeDealStage (plan Task 4.1)', () => {
 
     // (d) the destination stage's on-enter actions are dispatched.
     expect(runStageActionsMock).toHaveBeenCalledWith('deal-1', 'stage-to')
+
+    // (e) the deal.stage_changed outbound event is emitted with from/to names.
+    expect(emitEventMock).toHaveBeenCalledWith('deal.stage_changed', {
+      dealId: 'deal-1',
+      from: 'New',
+      to: 'Enrolled',
+    })
 
     expect(revalidatePathMock).toHaveBeenCalledWith('/admin/deals/deal-1')
   })

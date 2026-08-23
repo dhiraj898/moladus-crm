@@ -5,6 +5,7 @@ import { getServiceClient } from '@/lib/supabase/server'
 import { verifyRazorpaySignature } from '@/features/razorpay/verify'
 import { sendReceipt } from '@/features/aisensy/send'
 import { logActivity } from '@/features/crm/activities/service'
+import { emitEvent } from '@/features/webhooks/emit'
 
 /**
  * Razorpay webhook handler (spec §8, §11).
@@ -155,6 +156,27 @@ export async function POST(req: Request): Promise<Response> {
             razorpay_ref: paymentRef ?? null,
           },
         })
+      }
+
+      // On a genuine transition, emit the matching outbound webhook event
+      // (best-effort; `emitEvent` never throws). Gated on `transitioned` so it
+      // fires at-most-once under Razorpay retries + concurrent deliveries, in
+      // lock-step with the timeline `payment` activity above. `paid` →
+      // `deal.paid`; a terminal failure (`failed`/`link_expired`) →
+      // `deal.payment_failed`.
+      if (transitioned && transitioned.length > 0) {
+        if (newStatus === 'paid') {
+          await emitEvent('deal.paid', {
+            dealId: deal.id,
+            razorpay_ref: paymentRef ?? null,
+            amount: Number(deal.total_amount),
+          })
+        } else {
+          await emitEvent('deal.payment_failed', {
+            dealId: deal.id,
+            status: newStatus,
+          })
+        }
       }
 
       // On a genuine transition to paid, enqueue the receipt WhatsApp. Never

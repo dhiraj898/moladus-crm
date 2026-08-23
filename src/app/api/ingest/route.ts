@@ -12,6 +12,7 @@ import { resolveEntryStage } from '@/features/crm/automation/entry'
 import { runStageActions } from '@/features/crm/automation/runActions'
 import { logActivity } from '@/features/crm/activities/service'
 import { assignNext } from '@/features/rbac/assignment'
+import { emitEvent } from '@/features/webhooks/emit'
 
 /**
  * Public submission pipeline (spec §6, steps 1–14).
@@ -404,6 +405,22 @@ export async function POST(req: Request): Promise<Response> {
     await supabase.from('leads').update({ owner_id: assignee }).eq('id', leadId)
     await supabase.from('deals').update({ owner_id: assignee }).eq('id', dealId)
   }
+
+  // 6h. Emit outbound webhook events for the fresh submission (best-effort;
+  // `emitEvent` never throws, so a subscriber lookup/enqueue failure can never
+  // break enrollment). Only this fresh-record path emits — the resume/dedupe
+  // paths (findOpenDeal/resumeOpenDeal) return early and never re-fire these.
+  await emitEvent('submission.created', {
+    leadId,
+    contactId: contact.id,
+    productId: product.id,
+    formId: form.id,
+  })
+  await emitEvent('deal.created', {
+    dealId,
+    contactId: contact.id,
+    productId: product.id,
+  })
 
   // 7–9. Run the entry stage's on-enter actions (which, for the seeded Payment
   // Link Sent stage, mint the Razorpay link + send the enrollment WhatsApp),

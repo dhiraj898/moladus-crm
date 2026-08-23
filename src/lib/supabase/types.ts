@@ -11,6 +11,10 @@
  * `timestamptz` values are returned as ISO strings by supabase-js.
  */
 
+// Aliased to avoid colliding with the pre-existing inbound `WebhookEvent`
+// row interface below; this is the outbound event union (Spec B).
+import type { WebhookEvent as OutboundWebhookEvent } from '@/features/webhooks/events'
+
 /** Arbitrary JSON value stored in a jsonb column. */
 export type Json =
   | string
@@ -453,4 +457,37 @@ export interface Message {
   raw: Json
   sent_at: string | null
   created_at: string | null
+}
+
+// ---------------------------------------------------------------------------
+// Outbound webhooks (Spec B — migration 0010)
+// ---------------------------------------------------------------------------
+
+export interface WebhookEndpoint {
+  id: string
+  url: string
+  events: OutboundWebhookEvent[]
+  secret_enc: string
+  active: boolean
+  created_at: string
+  updated_at: string
+  created_by: string | null
+}
+
+/** webhook_deliveries.status */
+export type WebhookDeliveryStatus = 'pending' | 'delivered' | 'failed'
+
+export interface WebhookDelivery {
+  id: string
+  endpoint_id: string
+  event: OutboundWebhookEvent
+  payload: Json
+  status: WebhookDeliveryStatus
+  attempts: number
+  max_attempts: number
+  last_attempt_at: string | null
+  next_attempt_at: string
+  response_code: number | null
+  error: string | null
+  created_at: string
 }

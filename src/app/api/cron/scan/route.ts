@@ -1,17 +1,20 @@
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { getEnv } from '@/lib/env'
 import { scanDueSlaRules } from '@/features/crm/automation/sla'
+import { deliverDueWebhooks } from '@/features/webhooks/deliver'
 
 /**
  * Secret-protected SLA scanner endpoint (design §6, plan WS4 Task 4.2).
  *
  * A scheduler (Railway cron, or a manual `curl`) hits this route on an interval
- * (~5 min). It authorizes with `Authorization: Bearer ${CRON_SECRET}` and,
- * on success, runs `scanDueSlaRules()` and returns `{ fired }`. Any other
- * request gets a 401 with no side effects — the scanner is the only server code
- * that fires SLA actions, so this bearer check is its authorization boundary
- * (the config UI actions use `getCurrentUser()`; this machine-to-machine route
- * cannot, so it uses the shared secret instead).
+ * (~5 min). It authorizes with `Authorization: Bearer ${CRON_SECRET}` and, on
+ * success, runs both time-based jobs — `scanDueSlaRules()` (SLA reminders) and
+ * `deliverDueWebhooks()` (drains the outbound webhook queue with retry/backoff)
+ * — returning `{ fired, delivered, failed }`. One Railway cron covers both. Any
+ * other request gets a 401 with no side effects — the scanner is the only server
+ * code that fires SLA actions and outbound deliveries, so this bearer check is
+ * its authorization boundary (the config UI actions use `getCurrentUser()`;
+ * this machine-to-machine route cannot, so it uses the shared secret instead).
  *
  * `runtime = 'nodejs'` because the timing-safe compare uses `node:crypto`, and
  * `dynamic = 'force-dynamic'` so the route is never statically cached.
@@ -19,7 +22,8 @@ import { scanDueSlaRules } from '@/features/crm/automation/sla'
  * ENV-PENDING: scheduled firing is wired at the Railway deploy (a cron job that
  * curls this route with the secret). Until then, verify manually:
  *   curl -sS -H "Authorization: Bearer $CRON_SECRET" https://<app>/api/cron/scan
- * expecting `{"fired":N}` (and a 401 with a wrong/absent header).
+ * expecting `{"fired":N,"delivered":N,"failed":N}` (and a 401 with a
+ * wrong/absent header).
  */
 
 export const runtime = 'nodejs'
@@ -44,8 +48,9 @@ async function handle(request: Request): Promise<Response> {
   if (!isAuthorized(request)) {
     return Response.json({ error: 'unauthorized' }, { status: 401 })
   }
-  const result = await scanDueSlaRules()
-  return Response.json(result)
+  const { fired } = await scanDueSlaRules()
+  const { delivered, failed } = await deliverDueWebhooks()
+  return Response.json({ fired, delivered, failed })
 }
 
 export function GET(request: Request): Promise<Response> {
