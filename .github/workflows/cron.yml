@@ -1,0 +1,31 @@
+name: Scheduled scan (SLA reminders + webhook delivery)
+
+# Hits /api/cron/scan every 5 minutes so the workflow-automation SLA reminders
+# and the outbound webhook delivery queue drain on schedule. This replaces a
+# Railway cron service — GitHub Actions is free and the repo is already here.
+#
+# Requires two repository secrets (Settings → Secrets and variables → Actions):
+#   APP_URL      = https://<your-railway-domain>            (no trailing slash)
+#   CRON_SECRET  = <same value set in Railway env>
+#
+# Note: GitHub's scheduled runs can lag a few minutes under load; that's fine
+# for T+1/T+2 day-scale reminders and webhook retry backoff.
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch: {}
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call cron scan endpoint
+        run: |
+          code=$(curl -sS -o /tmp/out.txt -w '%{http_code}' \
+            -X POST \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "${{ secrets.APP_URL }}/api/cron/scan")
+          echo "HTTP $code"
+          cat /tmp/out.txt
+          test "$code" = "200"
