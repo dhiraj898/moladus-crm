@@ -9,6 +9,11 @@ import { computeGST, type GSTBreakdown } from '@/features/gst/compute'
 import { createPaymentLink } from '@/features/razorpay/paymentLink'
 import { logActivity } from '@/features/crm/activities/service'
 import { runStageActions } from '@/features/crm/automation/runActions'
+import { getActiveCustomFieldDefs } from '@/features/crm/custom-fields/queries'
+import {
+  validateCustomFields,
+  toFieldErrors,
+} from '@/features/crm/custom-fields/validate'
 import type { Contact, Product } from '@/lib/supabase/types'
 import {
   createDealSchema,
@@ -212,6 +217,16 @@ export async function createDeal(
   const { contact_id, lead_id, product_id, place_of_supply, create_payment_link } =
     parsed.data
 
+  const defs = await getActiveCustomFieldDefs('deal')
+  const cf = validateCustomFields('deal', defs, parsed.data.custom_fields ?? {})
+  if (!cf.ok) {
+    return {
+      ok: false,
+      error: 'Please correct the highlighted fields.',
+      fieldErrors: toFieldErrors(cf.errors),
+    }
+  }
+
   const supabase = getServiceClient()
 
   // Resolve the product (needed for the authoritative GST computation).
@@ -269,6 +284,7 @@ export async function createDeal(
       // (RBAC spec §9); reassignment afterwards is done via `assignDeal`.
       owner_id: ctx.user.id,
       payment_status: 'pending',
+      custom_fields: cf.values,
     })
     .select('id')
     .single()
@@ -392,6 +408,16 @@ export async function updateDeal(
   }
   const { contact_id, lead_id, product_id, place_of_supply } = parsed.data
 
+  const defs = await getActiveCustomFieldDefs('deal')
+  const cf = validateCustomFields('deal', defs, parsed.data.custom_fields ?? {})
+  if (!cf.ok) {
+    return {
+      ok: false,
+      error: 'Please correct the highlighted fields.',
+      fieldErrors: toFieldErrors(cf.errors),
+    }
+  }
+
   const supabase = getServiceClient()
 
   // Own-scope IDOR guard: refuse a deal the caller does not own, BEFORE mutating.
@@ -404,6 +430,21 @@ export async function updateDeal(
     const owner = (ownerRow as { owner_id: string | null } | null)?.owner_id ?? null
     if (owner !== ctx.user.id) return { ok: false, error: NOT_FOUND }
   }
+
+  // Preserve values for inactive/deleted defs: drop the active-def keys from the
+  // existing custom_fields, then spread the freshly-validated values on top.
+  const { data: existingDeal } = await supabase
+    .from('deals')
+    .select('custom_fields')
+    .eq('id', id)
+    .maybeSingle()
+  const activeKeys = new Set(defs.map((d) => d.key))
+  const preserved = Object.fromEntries(
+    Object.entries(
+      (existingDeal?.custom_fields ?? {}) as Record<string, unknown>
+    ).filter(([k]) => !activeKeys.has(k))
+  )
+  const mergedCustom = { ...preserved, ...cf.values }
 
   const { data: productRow, error: productError } = await supabase
     .from('products')
@@ -432,6 +473,7 @@ export async function updateDeal(
       igst: gst.igst,
       total_amount: gst.total,
       place_of_supply,
+      custom_fields: mergedCustom,
       updated_at: new Date().toISOString(),
     })
     .eq('id', id)

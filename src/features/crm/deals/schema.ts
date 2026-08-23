@@ -29,6 +29,9 @@ export const createDealSchema = z.object({
     .min(1, 'Place of supply is required')
     .max(60, 'Place of supply is too long'),
   create_payment_link: z.boolean().default(false),
+  // Raw custom-field values keyed by def.key; validated separately by the
+  // data-driven `validateCustomFields` helper, not by this static schema.
+  custom_fields: z.record(z.string(), z.unknown()).optional().default({}),
 })
 
 /** Edit accepts the same fields except the create-only payment-link flag. */

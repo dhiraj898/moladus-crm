@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { getContactDetail, searchLeads } from '@/features/records/queries'
+import { getActiveCustomFieldDefs } from '@/features/crm/custom-fields/queries'
 import { requireModuleView } from '@/features/rbac/guard'
 import ContactForm from '../../ContactForm'
 
@@ -18,9 +19,10 @@ export default async function EditContactPage({
 }) {
   const ctx = await requireModuleView('contacts')
   const { id } = await params
-  const [detail, leads] = await Promise.all([
+  const [detail, leads, customFieldDefs] = await Promise.all([
     getContactDetail(id),
     searchLeads({}, undefined, ctx),
+    getActiveCustomFieldDefs('contact'),
   ])
   if (!detail) notFound()
 
@@ -41,6 +43,7 @@ export default async function EditContactPage({
         mode="edit"
         contact={detail.contact}
         leads={leads.map((l) => ({ id: l.id, name: l.name, phone: l.phone }))}
+        customFieldDefs={customFieldDefs}
       />
     </div>
   )

@@ -12,6 +12,8 @@ import ActivityTimeline from '@/features/crm/ActivityTimeline'
 import { requireModuleView } from '@/features/rbac/guard'
 import { can } from '@/features/rbac/can'
 import { listAssignableUsers } from '@/features/rbac/queries'
+import { getActiveCustomFieldDefs } from '@/features/crm/custom-fields/queries'
+import { CustomFieldsCard } from '@/features/crm/custom-fields/CustomFieldsCard'
 import StageControl from './StageControl'
 import AssignControl from './AssignControl'
 import type { NotificationLog } from '@/lib/supabase/types'
@@ -104,10 +106,11 @@ export default async function DealDetailPage({
   const { deal, lead, contact, product, notifications } = timeline
   const currency = product?.currency ?? 'INR'
 
-  const [stages, stageHistory, activity] = await Promise.all([
+  const [stages, stageHistory, activity, customFieldDefs] = await Promise.all([
     listStages(),
     getDealStageHistory(deal.id),
     getActivityTimeline('deal', deal.id),
+    getActiveCustomFieldDefs('deal'),
   ])
 
   // Manual reassignment is offered only to roles that can edit deals.
@@ -242,6 +245,8 @@ export default async function DealDetailPage({
           <Row label="Created">{formatDateTime(deal.created_at)}</Row>
           <Row label="Updated">{formatDateTime(deal.updated_at)}</Row>
         </Card>
+
+        <CustomFieldsCard defs={customFieldDefs} values={deal.custom_fields} />
       </div>
 
       <section className="mt-4 rounded-[12px] border border-line bg-surface p-5">

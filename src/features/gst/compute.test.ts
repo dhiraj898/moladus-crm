@@ -18,6 +18,7 @@ function makeProduct(overrides: Partial<Product> = {}): Product {
     gst_percentage: 18,
     price_mode: 'exclusive',
     active: true,
+    custom_fields: {},
     created_at: null,
     updated_at: null,
     ...overrides,

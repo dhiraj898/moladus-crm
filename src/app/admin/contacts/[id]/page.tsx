@@ -5,6 +5,8 @@ import { getActivityTimeline } from '@/features/crm/activities/service'
 import { formatMoney } from '@/features/form-engine/estimate'
 import PaymentStatusChip from '@/features/records/PaymentStatusChip'
 import ActivityTimeline from '@/features/crm/ActivityTimeline'
+import { getActiveCustomFieldDefs } from '@/features/crm/custom-fields/queries'
+import { CustomFieldsCard } from '@/features/crm/custom-fields/CustomFieldsCard'
 
 /**
  * Contact detail (spec §6 — Contact detail). Server component: loads the
@@ -116,6 +118,7 @@ export default async function ContactDetailPage({
 
   const { contact, lead, deals } = detail
   const activity = await getActivityTimeline('contact', contact.id)
+  const customFieldDefs = await getActiveCustomFieldDefs('contact')
   const tags = contact.tags ?? []
 
   return (
@@ -190,6 +193,11 @@ export default async function ContactDetailPage({
         </Card>
 
         <LinkedDealsCard deals={deals} />
+
+        <CustomFieldsCard
+          defs={customFieldDefs}
+          values={contact.custom_fields}
+        />
       </div>
 
       <section className="mt-4 rounded-[12px] border border-line bg-surface p-5">

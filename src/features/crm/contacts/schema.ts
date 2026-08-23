@@ -42,6 +42,9 @@ export const contactSchema = z.object({
   marketing_consent: z.boolean().default(false),
   lead_id: optionalUuid,
   tags: z.array(z.string().trim().min(1)).max(50).default([]),
+  // Raw custom-field values keyed by def.key; validated separately by the
+  // data-driven `validateCustomFields` helper, not by this static schema.
+  custom_fields: z.record(z.string(), z.unknown()).optional().default({}),
 })
 
 /** Raw, pre-parse shape accepted by the schema (what callers pass in). */

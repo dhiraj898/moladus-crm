@@ -15,6 +15,11 @@ const SETTINGS_NAV: {
   need: 'settings' | 'automation'
 }[] = [
   { href: '/admin/settings/stages', label: 'Stages', need: 'settings' },
+  {
+    href: '/admin/settings/custom-fields',
+    label: 'Custom Fields',
+    need: 'settings',
+  },
   { href: '/admin/settings/roles', label: 'Roles', need: 'settings' },
   { href: '/admin/settings/users', label: 'Users', need: 'settings' },
   { href: '/admin/settings/automation', label: 'Automation', need: 'automation' },

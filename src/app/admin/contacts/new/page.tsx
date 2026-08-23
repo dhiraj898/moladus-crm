@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { searchLeads } from '@/features/records/queries'
+import { getActiveCustomFieldDefs } from '@/features/crm/custom-fields/queries'
 import { requireModuleView } from '@/features/rbac/guard'
 import ContactForm from '../ContactForm'
 
@@ -12,6 +13,7 @@ export const dynamic = 'force-dynamic'
 export default async function NewContactPage() {
   const ctx = await requireModuleView('contacts')
   const leads = await searchLeads({}, undefined, ctx)
+  const customFieldDefs = await getActiveCustomFieldDefs('contact')
 
   return (
     <div className="mx-auto max-w-[960px]">
@@ -32,6 +34,7 @@ export default async function NewContactPage() {
       <ContactForm
         mode="create"
         leads={leads.map((l) => ({ id: l.id, name: l.name, phone: l.phone }))}
+        customFieldDefs={customFieldDefs}
       />
     </div>
   )

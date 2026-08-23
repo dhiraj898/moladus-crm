@@ -2,13 +2,19 @@
 
 import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
-import type { Lead, Product } from '@/lib/supabase/types'
+import type {
+  CustomFieldDef,
+  CustomFieldValues,
+  Lead,
+  Product,
+} from '@/lib/supabase/types'
 import {
   createLead,
   updateLead,
   type ActionResult,
 } from '@/features/crm/leads/actions'
 import { LEAD_STATUSES } from '@/features/crm/leads/schema'
+import CustomFieldInputs from '@/features/crm/custom-fields/CustomFieldInputs'
 
 /**
  * Manual create / edit form for a single lead (spec §6). A thin hand-entered
@@ -18,8 +24,18 @@ import { LEAD_STATUSES } from '@/features/crm/leads/schema'
  */
 
 type Props =
-  | { mode: 'create'; products: Product[]; lead?: undefined }
-  | { mode: 'edit'; products: Product[]; lead: Lead }
+  | {
+      mode: 'create'
+      products: Product[]
+      customFieldDefs: CustomFieldDef[]
+      lead?: undefined
+    }
+  | {
+      mode: 'edit'
+      products: Product[]
+      customFieldDefs: CustomFieldDef[]
+      lead: Lead
+    }
 
 const inputClass =
   'rounded-[8px] border border-line bg-surface2 px-3.5 py-2.5 text-[15px] text-text outline-none transition-colors focus:border-accent'
@@ -36,7 +52,7 @@ function FieldError({ messages }: { messages?: string[] }) {
 }
 
 export default function LeadForm(props: Props) {
-  const { mode, products } = props
+  const { mode, products, customFieldDefs } = props
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
 
@@ -50,6 +66,9 @@ export default function LeadForm(props: Props) {
   const [source, setSource] = useState(props.lead?.source ?? '')
   const [status, setStatus] = useState(props.lead?.status ?? 'new')
   const [productId, setProductId] = useState(props.lead?.product_id ?? '')
+  const [customFields, setCustomFields] = useState<CustomFieldValues>(
+    props.lead?.custom_fields ?? {}
+  )
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -64,6 +83,7 @@ export default function LeadForm(props: Props) {
       source,
       status: status as (typeof LEAD_STATUSES)[number],
       product_id: productId,
+      custom_fields: customFields,
     }
 
     startTransition(async () => {
@@ -187,6 +207,13 @@ export default function LeadForm(props: Props) {
         </select>
         <FieldError messages={fieldErrors.product_id} />
       </label>
+
+      <CustomFieldInputs
+        defs={customFieldDefs}
+        values={customFields}
+        errors={fieldErrors}
+        onChange={setCustomFields}
+      />
 
       {formError ? (
         <p role="alert" className="text-sm text-red">
