@@ -93,6 +93,44 @@ export interface FieldOption {
   value: string
 }
 
+// ---------------------------------------------------------------------------
+// Custom fields (spec 4 — migration 0006)
+// ---------------------------------------------------------------------------
+
+/** custom_field_defs.entity_type */
+export type CustomFieldEntity = 'product' | 'lead' | 'deal' | 'contact'
+
+/** custom_field_defs.field_type — subset of FieldType reused for custom fields. */
+export type CustomFieldType =
+  | 'short_text'
+  | 'long_text'
+  | 'number'
+  | 'dropdown'
+  | 'radio'
+  | 'checkbox_group'
+  | 'date'
+  | 'yes_no'
+
+/** A single stored custom-field value. */
+export type CustomFieldValue = string | number | boolean | string[] | null
+
+/** The custom_fields JSONB payload, keyed by CustomFieldDef.key. */
+export type CustomFieldValues = Record<string, CustomFieldValue>
+
+export interface CustomFieldDef {
+  id: string
+  entity_type: CustomFieldEntity
+  key: string
+  label: string
+  field_type: CustomFieldType
+  required: boolean
+  options: FieldOption[]
+  display_order: number
+  active: boolean
+  created_at: string
+  updated_at: string
+}
+
 /**
  * Conditional-visibility rule (form_fields.visible_when).
  * `null` on the column means the field is always visible.
@@ -120,6 +158,7 @@ export interface Product {
   gst_percentage: number | null
   price_mode: PriceMode | null
   active: boolean | null
+  custom_fields: CustomFieldValues
   created_at: string | null
   updated_at: string | null
 }
@@ -164,6 +203,7 @@ export interface Lead {
   status: string | null
   owner_id: string | null
   raw_payload: Json
+  custom_fields: CustomFieldValues
   created_at: string | null
 }
 
@@ -176,6 +216,7 @@ export interface Contact {
   marketing_consent: boolean | null
   consent_timestamp: string | null
   tags: string[] | null
+  custom_fields: CustomFieldValues
   created_at: string | null
 }
 
@@ -198,6 +239,7 @@ export interface Deal {
   razorpay_payment_link_id: string | null
   razorpay_payment_link_url: string | null
   razorpay_ref: string | null
+  custom_fields: CustomFieldValues
   created_at: string | null
   updated_at: string | null
 }
