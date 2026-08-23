@@ -57,6 +57,7 @@ export default function FormMetaForm({ mode, form, products }: Props) {
     form?.welcome_message ?? ''
   )
   const [submitLabel, setSubmitLabel] = useState(form?.submit_label ?? 'Submit')
+  const [hidePrice, setHidePrice] = useState(form?.hide_price ?? false)
 
   function handleNameChange(value: string) {
     setName(value)
@@ -77,6 +78,7 @@ export default function FormMetaForm({ mode, form, products }: Props) {
       // explicit action in the builder (publishForm / unpublishForm).
       welcome_message: welcomeMessage,
       submit_label: submitLabel,
+      hide_price: hidePrice,
     }
 
     startTransition(async () => {
@@ -174,6 +176,21 @@ export default function FormMetaForm({ mode, form, products }: Props) {
           className={inputClass}
         />
         <FieldError messages={fieldErrors.submit_label} />
+      </label>
+
+      <label className="flex items-start gap-3">
+        <input
+          type="checkbox"
+          checked={hidePrice}
+          onChange={(e) => setHidePrice(e.target.checked)}
+          className="mt-0.5 h-4 w-4 accent-[var(--accent)]"
+        />
+        <span className="flex flex-col gap-1">
+          <span className={labelClass}>Hide price</span>
+          <span className="text-xs text-dim">
+            Hide the product cost estimate in the public form header.
+          </span>
+        </span>
       </label>
 
       {formError ? (

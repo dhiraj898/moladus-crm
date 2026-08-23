@@ -95,6 +95,7 @@ export const formSchema = z.object({
   // updateForm preserves the stored status.
   welcome_message: nullableText,
   submit_label: z.string().trim().min(1).default('Submit'),
+  hide_price: z.coerce.boolean().default(false),
 })
 
 /** Parsed, validated form input (post-transform). */

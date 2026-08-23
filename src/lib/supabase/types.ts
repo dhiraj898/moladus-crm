@@ -171,6 +171,7 @@ export interface Form {
   status: FormStatus | null
   welcome_message: string | null
   submit_label: string | null
+  hide_price: boolean
   created_at: string | null
   updated_at: string | null
 }

@@ -45,7 +45,7 @@ export default async function PublicFormPage({
   if (!loaded) notFound()
   const { form, fields, product } = loaded
 
-  const estimate = product ? estimatePrice(product) : null
+  const estimate = product && !form.hide_price ? estimatePrice(product) : null
 
   return (
     <main className="flex min-h-screen flex-col">
