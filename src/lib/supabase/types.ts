@@ -422,6 +422,22 @@ export interface AssignmentState {
   updated_at: string
 }
 
+// ---------------------------------------------------------------------------
+// Integration settings (Spec A — migration 0009)
+// ---------------------------------------------------------------------------
+
+/** integration_settings.key — the managed provider secret keys. */
+export type SecretKey =
+  | 'RAZORPAY_KEY_ID' | 'RAZORPAY_KEY_SECRET' | 'RAZORPAY_WEBHOOK_SECRET'
+  | 'AISENSY_API_KEY' | 'AISENSY_WEBHOOK_SECRET'
+
+export interface IntegrationSetting {
+  key: SecretKey
+  value_enc: string
+  updated_at: string
+  updated_by: string | null
+}
+
 /** messages.direction */
 export type MessageDirection = 'inbound' | 'outbound'
 
