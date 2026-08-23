@@ -420,3 +420,20 @@ export interface AssignmentState {
   last_user_id: string | null
   updated_at: string
 }
+
+/** messages.direction */
+export type MessageDirection = 'inbound' | 'outbound'
+
+export interface Message {
+  id: string
+  contact_id: string | null
+  aisensy_message_id: string
+  direction: MessageDirection
+  sender: string | null
+  body: string | null
+  message_type: string | null
+  phone_number: string | null
+  raw: Json
+  sent_at: string | null
+  created_at: string | null
+}
