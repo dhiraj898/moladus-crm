@@ -7,6 +7,8 @@ import PaymentStatusChip from '@/features/records/PaymentStatusChip'
 import ActivityTimeline from '@/features/crm/ActivityTimeline'
 import { getActiveCustomFieldDefs } from '@/features/crm/custom-fields/queries'
 import { CustomFieldsCard } from '@/features/crm/custom-fields/CustomFieldsCard'
+import { getConversation } from '@/features/messages/queries'
+import ConversationThread from '@/features/messages/ConversationThread'
 
 /**
  * Contact detail (spec §6 — Contact detail). Server component: loads the
@@ -121,6 +123,12 @@ export default async function ContactDetailPage({
   const customFieldDefs = await getActiveCustomFieldDefs('contact')
   const tags = contact.tags ?? []
 
+  // Read-only WhatsApp conversation, matched by contact id / whatsapp number.
+  const messages = await getConversation({
+    contactId: contact.id,
+    whatsappNumber: contact.whatsapp_number,
+  })
+
   return (
     <div className="mx-auto max-w-[820px]">
       <div className="mb-6">
@@ -206,6 +214,13 @@ export default async function ContactDetailPage({
           entityId={contact.id}
           items={activity}
         />
+      </section>
+
+      <section className="mt-4 rounded-[12px] border border-line bg-surface p-5">
+        <h2 className="mb-3 text-xs font-semibold uppercase tracking-[0.12em] text-dim">
+          WhatsApp
+        </h2>
+        <ConversationThread messages={messages} />
       </section>
     </div>
   )

@@ -14,6 +14,8 @@ import { can } from '@/features/rbac/can'
 import { listAssignableUsers } from '@/features/rbac/queries'
 import { getActiveCustomFieldDefs } from '@/features/crm/custom-fields/queries'
 import { CustomFieldsCard } from '@/features/crm/custom-fields/CustomFieldsCard'
+import { getConversation } from '@/features/messages/queries'
+import ConversationThread from '@/features/messages/ConversationThread'
 import StageControl from './StageControl'
 import AssignControl from './AssignControl'
 import type { NotificationLog } from '@/lib/supabase/types'
@@ -116,6 +118,12 @@ export default async function DealDetailPage({
   // Manual reassignment is offered only to roles that can edit deals.
   const canEdit = can(ctx.permissions, 'deals', 'edit')
   const assignableUsers = canEdit ? await listAssignableUsers() : []
+
+  // Read-only WhatsApp conversation, matched by the resolved contact / phone.
+  const messages = await getConversation({
+    contactId: contact?.id ?? null,
+    whatsappNumber: contact?.whatsapp_number ?? null,
+  })
 
   return (
     <div className="mx-auto max-w-[820px]">
@@ -315,6 +323,13 @@ export default async function DealDetailPage({
 
       <section className="mt-4 rounded-[12px] border border-line bg-surface p-5">
         <ActivityTimeline entityType="deal" entityId={deal.id} items={activity} />
+      </section>
+
+      <section className="mt-4 rounded-[12px] border border-line bg-surface p-5">
+        <h2 className="mb-3 text-xs font-semibold uppercase tracking-[0.12em] text-dim">
+          WhatsApp
+        </h2>
+        <ConversationThread messages={messages} />
       </section>
     </div>
   )
