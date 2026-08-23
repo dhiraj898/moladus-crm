@@ -9,10 +9,11 @@ export default function NoAccessPage() {
     <div className="flex min-h-[60vh] items-center justify-center">
       <div className="max-w-[420px] rounded-[12px] border border-line bg-surface px-8 py-10 text-center">
         <h1 className="text-lg font-bold tracking-[-0.01em] text-text">
-          No access
+          No access to this section
         </h1>
         <p className="mt-2 text-sm text-dim">
-          You don&apos;t have access to any modules. Contact your administrator.
+          Your role doesn&apos;t grant access here. If you think this is a
+          mistake, refresh or contact your administrator.
         </p>
       </div>
     </div>

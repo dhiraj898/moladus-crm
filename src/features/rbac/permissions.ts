@@ -33,16 +33,26 @@ export async function getCurrentUserWithRole(): Promise<CurrentUserWithRole | nu
   if (!user) return null
 
   const supabase = getServiceClient()
-  const { data, error } = await supabase
-    .from('profiles')
-    .select(
-      'role_id, role:roles (id, name, permissions, in_assignment_pool, is_system, created_at, updated_at)'
-    )
-    .eq('user_id', user.id)
-    .maybeSingle()
+  const selectProfile = () =>
+    supabase
+      .from('profiles')
+      .select(
+        'role_id, role:roles (id, name, permissions, in_assignment_pool, is_system, created_at, updated_at)'
+      )
+      .eq('user_id', user.id)
+      .maybeSingle()
+
+  // Retry ONCE on a transient lookup error before failing closed, so a momentary
+  // DB hiccup doesn't spuriously lock a valid user out (they'd otherwise see the
+  // no-access screen). A successful query with no row is a legitimate deny and is
+  // NOT retried below.
+  let { data, error } = await selectProfile()
+  if (error) {
+    ;({ data, error } = await selectProfile())
+  }
 
   if (error) {
-    // Fail closed on a lookup error — deny rather than crash the render.
+    // Fail closed on a persistent lookup error — deny rather than crash the render.
     return { user, role: null, permissions: structuredClone(DEFAULT_DENY_ALL) }
   }
 
