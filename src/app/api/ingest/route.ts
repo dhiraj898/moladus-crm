@@ -31,9 +31,10 @@ import { assignNext } from '@/features/rbac/assignment'
  * Node runtime is required: the Razorpay SDK + downstream `node:crypto` are not
  * edge-compatible.
  *
- * ENV-PENDING: the end-to-end flow needs live Supabase, Razorpay, hCaptcha, and
- * AiSensy credentials. Manual test once keys exist is documented at the bottom
- * of this file.
+ * ENV-PENDING: the end-to-end flow needs live Supabase, Razorpay, Altcha
+ * (`ALTCHA_HMAC_KEY` + `NEXT_PUBLIC_CAPTCHA_ENABLED=true`), and AiSensy
+ * credentials. Manual test once keys exist is documented at the bottom of this
+ * file.
  */
 export const runtime = 'nodejs'
 
@@ -215,9 +216,9 @@ export async function POST(req: Request): Promise<Response> {
     return fail('Missing form_id.', 400)
   }
 
-  // 2. CAPTCHA verify (400 on fail). Only enforced when a site key is configured.
+  // 2. CAPTCHA verify (400 on fail). Only enforced when CAPTCHA is enabled.
   const env = getEnv()
-  if (env.NEXT_PUBLIC_HCAPTCHA_SITE_KEY) {
+  if (env.NEXT_PUBLIC_CAPTCHA_ENABLED === 'true') {
     const captchaOk = await verifyCaptcha(captchaToken)
     if (!captchaOk) {
       return fail('Captcha verification failed. Please try again.', 400)
@@ -412,9 +413,10 @@ export async function POST(req: Request): Promise<Response> {
 
 /*
  * ENV-PENDING — end-to-end manual test (needs live Supabase + Razorpay +
- * hCaptcha + AiSensy):
- *   1. Publish a form bound to a product; open `/f/<slug>`, solve the hCaptcha,
- *      and submit. Expect a redirect to the Razorpay hosted payment link.
+ * Altcha + AiSensy):
+ *   1. Publish a form bound to a product; open `/f/<slug>`, let the Altcha
+ *      widget solve, and submit. Expect a redirect to the Razorpay hosted
+ *      payment link.
  *   2. In Supabase: a `leads` row (with raw_payload/utm/state/product_id), a
  *      `contacts` row (consent + consent_timestamp set iff the consent field was
  *      "yes"), and a `deals` row with payment_status='link_sent' and both
