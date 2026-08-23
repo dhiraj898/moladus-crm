@@ -8,6 +8,7 @@ const schema = z.object({
   RAZORPAY_KEY_SECRET: z.string().min(1),
   RAZORPAY_WEBHOOK_SECRET: z.string().min(1),
   AISENSY_API_KEY: z.string().min(1),
+  AISENSY_WEBHOOK_SECRET: z.string().min(1).optional(),
   HCAPTCHA_SECRET: z.string().min(1),
   NEXT_PUBLIC_HCAPTCHA_SITE_KEY: z.string().min(1),
   BUSINESS_STATE: z.string().min(1),
