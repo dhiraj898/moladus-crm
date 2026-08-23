@@ -1,5 +1,5 @@
 import 'server-only'
-import { getEnv } from '@/lib/env'
+import { getSecret } from '@/features/integrations/secrets'
 import { getServiceClient } from '@/lib/supabase/server'
 import { logActivity } from '@/features/crm/activities/service'
 
@@ -36,12 +36,18 @@ async function sendTemplate(
   params: string[],
 ): Promise<{ ok: boolean; error?: string }> {
   try {
-    const env = getEnv()
+    // Resolve the API key via the secret store (DB override, then env). Fail
+    // soft when it is unset so a missing key logs + returns not-sent rather than
+    // ever crashing the ingest pipeline or webhook that called us.
+    const apiKey = await getSecret('AISENSY_API_KEY')
+    if (!apiKey) {
+      return { ok: false, error: 'AiSensy API key not configured' }
+    }
     const res = await fetch(AISENSY_ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        apiKey: env.AISENSY_API_KEY,
+        apiKey,
         campaignName: template,
         destination: whatsapp,
         templateParams: params,

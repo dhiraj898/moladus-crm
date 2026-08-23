@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import crypto from 'node:crypto'
-import { getEnv } from '@/lib/env'
+import { getSecret } from '@/features/integrations/secrets'
 import { getServiceClient } from '@/lib/supabase/server'
 import { verifyAiSensySignature } from '@/features/aisensy/verify'
 import type { MessageDirection } from '@/lib/supabase/types'
@@ -46,19 +46,18 @@ interface AiSensyWebhookBody {
 }
 
 export async function POST(req: Request): Promise<Response> {
-  const env = getEnv()
-
   // 0. Fail safe when the webhook secret is not configured yet (deploy-first,
-  //    set-secret-after window). AISENSY_WEBHOOK_SECRET is optional in env, so
-  //    getEnv() does not throw; the route refuses cleanly instead of crashing.
-  if (!env.AISENSY_WEBHOOK_SECRET) {
+  //    set-secret-after window). Resolve via getSecret (DB override, then env);
+  //    when neither has it the route refuses cleanly instead of crashing.
+  const secret = await getSecret('AISENSY_WEBHOOK_SECRET')
+  if (!secret) {
     return NextResponse.json({ error: 'webhook not configured' }, { status: 503 })
   }
 
   // 1. Verify signature over the RAW body.
   const rawBody = await req.text()
   const signature = req.headers.get('x-aisensy-signature')
-  if (!verifyAiSensySignature(rawBody, signature, env.AISENSY_WEBHOOK_SECRET)) {
+  if (!verifyAiSensySignature(rawBody, signature, secret)) {
     return NextResponse.json({ error: 'invalid signature' }, { status: 401 })
   }
 

@@ -11,8 +11,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
  *     phone normalized; contact resolved by phone.
  *   - Non-duplicate storage error → 500 so AiSensy retries.
  *
- * `@/lib/env` is mocked through a mutable hoisted holder so a single test can
- * clear the secret and exercise the 503 fail-safe path.
+ * `@/features/integrations/secrets` is mocked through a mutable hoisted holder
+ * so a single test can clear the secret and exercise the 503 fail-safe path.
  */
 
 const SECRET = 'whsec_test_aisensy'
@@ -48,8 +48,8 @@ function makeClient() {
   }
 }
 
-vi.mock('@/lib/env', () => ({
-  getEnv: () => envState,
+vi.mock('@/features/integrations/secrets', () => ({
+  getSecret: async () => envState.AISENSY_WEBHOOK_SECRET,
 }))
 vi.mock('@/lib/supabase/server', () => ({
   getServiceClient: () => makeClient(),

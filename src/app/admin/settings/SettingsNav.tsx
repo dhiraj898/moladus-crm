@@ -22,6 +22,11 @@ const SETTINGS_NAV: {
   },
   { href: '/admin/settings/roles', label: 'Roles', need: 'settings' },
   { href: '/admin/settings/users', label: 'Users', need: 'settings' },
+  {
+    href: '/admin/settings/integrations',
+    label: 'Integrations',
+    need: 'settings',
+  },
   { href: '/admin/settings/automation', label: 'Automation', need: 'automation' },
 ]
 
