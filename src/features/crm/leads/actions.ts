@@ -5,6 +5,11 @@ import { getServiceClient } from '@/lib/supabase/server'
 import { requirePermission } from '@/features/rbac/permissions'
 import { scopeFor } from '@/features/rbac/can'
 import { logActivity } from '@/features/crm/activities/service'
+import { getActiveCustomFieldDefs } from '@/features/crm/custom-fields/queries'
+import {
+  validateCustomFields,
+  toFieldErrors,
+} from '@/features/crm/custom-fields/validate'
 import { leadSchema, type LeadInputRaw } from './schema'
 
 /**
@@ -53,6 +58,16 @@ export async function createLead(
   }
   const { name, email, phone, state, source, status, product_id } = parsed.data
 
+  const defs = await getActiveCustomFieldDefs('lead')
+  const cf = validateCustomFields('lead', defs, parsed.data.custom_fields ?? {})
+  if (!cf.ok) {
+    return {
+      ok: false,
+      error: 'Please correct the highlighted fields.',
+      fieldErrors: toFieldErrors(cf.errors),
+    }
+  }
+
   const supabase = getServiceClient()
   const { data, error } = await supabase
     .from('leads')
@@ -64,6 +79,7 @@ export async function createLead(
       source: source ?? null,
       status,
       product_id: product_id ?? null,
+      custom_fields: cf.values,
       // Manual create: the creator becomes the initial owner/assignee. Round-robin
       // auto-assignment applies ONLY to ingested submissions, never manual creates
       // (RBAC spec §9); reassignment afterwards is done via `assignLead`.
@@ -114,6 +130,16 @@ export async function updateLead(
   }
   const { name, email, phone, state, source, status, product_id } = parsed.data
 
+  const defs = await getActiveCustomFieldDefs('lead')
+  const cf = validateCustomFields('lead', defs, parsed.data.custom_fields ?? {})
+  if (!cf.ok) {
+    return {
+      ok: false,
+      error: 'Please correct the highlighted fields.',
+      fieldErrors: toFieldErrors(cf.errors),
+    }
+  }
+
   const supabase = getServiceClient()
 
   // Own-scope IDOR guard: re-read the row's owner_id and refuse when it is not
@@ -129,6 +155,22 @@ export async function updateLead(
     if (owner !== ctx.user.id) return { ok: false, error: NOT_FOUND }
   }
 
+  // Preserve values for inactive/deleted defs: load the existing row's
+  // custom_fields, drop the keys owned by the active defs, then spread the
+  // freshly-validated values on top so hidden values survive an edit.
+  const { data: existing } = await supabase
+    .from('leads')
+    .select('custom_fields')
+    .eq('id', id)
+    .maybeSingle()
+  const activeKeys = new Set(defs.map((d) => d.key))
+  const preserved = Object.fromEntries(
+    Object.entries(
+      (existing?.custom_fields ?? {}) as Record<string, unknown>
+    ).filter(([k]) => !activeKeys.has(k))
+  )
+  const mergedCustom = { ...preserved, ...cf.values }
+
   const { error } = await supabase
     .from('leads')
     .update({
@@ -139,6 +181,7 @@ export async function updateLead(
       source: source ?? null,
       status,
       product_id: product_id ?? null,
+      custom_fields: mergedCustom,
     })
     .eq('id', id)
 

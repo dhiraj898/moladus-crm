@@ -2,9 +2,14 @@
 
 import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
-import type { Product } from '@/lib/supabase/types'
+import type {
+  CustomFieldDef,
+  CustomFieldValues,
+  Product,
+} from '@/lib/supabase/types'
 import { createProduct, updateProduct, type ActionResult } from './actions'
 import type { ProductInputRaw } from './schema'
+import CustomFieldInputs from '@/features/crm/custom-fields/CustomFieldInputs'
 
 /**
  * Create / edit form for a single product (spec §4 — Products).
@@ -15,8 +20,8 @@ import type { ProductInputRaw } from './schema'
  */
 
 type Props =
-  | { mode: 'create'; product?: undefined }
-  | { mode: 'edit'; product: Product }
+  | { mode: 'create'; customFieldDefs: CustomFieldDef[]; product?: undefined }
+  | { mode: 'edit'; customFieldDefs: CustomFieldDef[]; product: Product }
 
 const inputClass =
   'rounded-[8px] border border-line bg-surface2 px-3.5 py-2.5 text-[15px] text-text outline-none transition-colors focus:border-accent'
@@ -33,7 +38,7 @@ function FieldError({ messages }: { messages?: string[] }) {
   )
 }
 
-export default function ProductForm({ mode, product }: Props) {
+export default function ProductForm({ mode, product, customFieldDefs }: Props) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
 
@@ -55,6 +60,9 @@ export default function ProductForm({ mode, product }: Props) {
   )
   const [priceMode, setPriceMode] = useState(product?.price_mode ?? 'exclusive')
   const [active, setActive] = useState(product?.active ?? true)
+  const [customFields, setCustomFields] = useState<CustomFieldValues>(
+    product?.custom_fields ?? {}
+  )
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -72,6 +80,7 @@ export default function ProductForm({ mode, product }: Props) {
       gst_percentage: gstPercentage,
       price_mode: priceMode,
       active,
+      custom_fields: customFields,
     }
 
     startTransition(async () => {
@@ -237,6 +246,13 @@ export default function ProductForm({ mode, product }: Props) {
           />
         </label>
       </div>
+
+      <CustomFieldInputs
+        defs={customFieldDefs}
+        values={customFields}
+        errors={fieldErrors}
+        onChange={setCustomFields}
+      />
 
       {formError ? (
         <p role="alert" className="text-sm text-red">

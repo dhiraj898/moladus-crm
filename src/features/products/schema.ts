@@ -58,6 +58,10 @@ export const productSchema = z.object({
   ),
   price_mode: z.enum(['inclusive', 'exclusive']).default('exclusive'),
   active: z.coerce.boolean().default(true),
+  // Raw custom-field values keyed by def.key; validated separately by the
+  // data-driven `validateCustomFields` helper, not by this static schema. Kept
+  // out of the DB write (the action strips it and persists coerced values).
+  custom_fields: z.record(z.string(), z.unknown()).optional().default({}),
 })
 
 /** Parsed, validated product input (post-transform). */

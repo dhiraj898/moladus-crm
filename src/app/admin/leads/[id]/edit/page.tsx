@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { listProducts } from '@/features/products/actions'
 import { getLeadDetail } from '@/features/records/queries'
+import { getActiveCustomFieldDefs } from '@/features/crm/custom-fields/queries'
 import { requireModuleView } from '@/features/rbac/guard'
 import LeadForm from '../../LeadForm'
 
@@ -26,6 +27,7 @@ export default async function EditLeadPage({
   const activeProducts = products.filter(
     (p) => p.active !== false || p.id === detail.lead.product_id
   )
+  const customFieldDefs = await getActiveCustomFieldDefs('lead')
 
   return (
     <div className="mx-auto max-w-[960px]">
@@ -40,7 +42,12 @@ export default async function EditLeadPage({
           Edit lead
         </h1>
       </div>
-      <LeadForm mode="edit" lead={detail.lead} products={activeProducts} />
+      <LeadForm
+        mode="edit"
+        lead={detail.lead}
+        products={activeProducts}
+        customFieldDefs={customFieldDefs}
+      />
     </div>
   )
 }

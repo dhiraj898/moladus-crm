@@ -2,7 +2,12 @@
 
 import { useEffect, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
-import type { Deal, Product } from '@/lib/supabase/types'
+import type {
+  CustomFieldDef,
+  CustomFieldValues,
+  Deal,
+  Product,
+} from '@/lib/supabase/types'
 import { formatMoney } from '@/features/form-engine/estimate'
 import type { GSTBreakdown } from '@/features/gst/compute'
 import {
@@ -11,6 +16,7 @@ import {
   previewDealGST,
   type ActionResult,
 } from '@/features/crm/deals/actions'
+import CustomFieldInputs from '@/features/crm/custom-fields/CustomFieldInputs'
 
 /**
  * Manual create / edit form for a single deal (spec §4.2 / §6).
@@ -40,6 +46,7 @@ type Props =
       products: Product[]
       contacts: DealFormContact[]
       leads: DealFormLead[]
+      customFieldDefs: CustomFieldDef[]
       deal?: undefined
     }
   | {
@@ -47,6 +54,7 @@ type Props =
       products: Product[]
       contacts: DealFormContact[]
       leads: DealFormLead[]
+      customFieldDefs: CustomFieldDef[]
       deal: Deal
     }
 
@@ -105,7 +113,7 @@ function FieldError({ messages }: { messages?: string[] }) {
 }
 
 export default function DealForm(props: Props) {
-  const { mode, products, contacts, leads } = props
+  const { mode, products, contacts, leads, customFieldDefs } = props
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
 
@@ -120,6 +128,9 @@ export default function DealForm(props: Props) {
     props.deal?.place_of_supply ?? ''
   )
   const [createLink, setCreateLink] = useState(false)
+  const [customFields, setCustomFields] = useState<CustomFieldValues>(
+    props.deal?.custom_fields ?? {}
+  )
 
   // Contact search filter (client-side over the passed list).
   const [contactQuery, setContactQuery] = useState('')
@@ -174,6 +185,7 @@ export default function DealForm(props: Props) {
           lead_id: leadId,
           product_id: productId,
           place_of_supply: placeOfSupply,
+          custom_fields: customFields,
         })
         if (!result.ok) {
           setFormError(result.error)
@@ -191,6 +203,7 @@ export default function DealForm(props: Props) {
         product_id: productId,
         place_of_supply: placeOfSupply,
         create_payment_link: createLink,
+        custom_fields: customFields,
       })
       if (!result.ok) {
         setFormError(result.error)
@@ -331,6 +344,13 @@ export default function DealForm(props: Props) {
           />
         </label>
       ) : null}
+
+      <CustomFieldInputs
+        defs={customFieldDefs}
+        values={customFields}
+        errors={fieldErrors}
+        onChange={setCustomFields}
+      />
 
       {formError ? (
         <p role="alert" className="text-sm text-red">

@@ -4,6 +4,11 @@ import { revalidatePath } from 'next/cache'
 import { getServiceClient } from '@/lib/supabase/server'
 import { requirePermission } from '@/features/rbac/permissions'
 import { logActivity } from '@/features/crm/activities/service'
+import { getActiveCustomFieldDefs } from '@/features/crm/custom-fields/queries'
+import {
+  validateCustomFields,
+  toFieldErrors,
+} from '@/features/crm/custom-fields/validate'
 import { contactSchema, type ContactInputRaw } from './schema'
 
 /**
@@ -59,6 +64,20 @@ export async function createContact(
   const { name, email, whatsapp_number, marketing_consent, lead_id, tags } =
     parsed.data
 
+  const defs = await getActiveCustomFieldDefs('contact')
+  const cf = validateCustomFields(
+    'contact',
+    defs,
+    parsed.data.custom_fields ?? {}
+  )
+  if (!cf.ok) {
+    return {
+      ok: false,
+      error: 'Please correct the highlighted fields.',
+      fieldErrors: toFieldErrors(cf.errors),
+    }
+  }
+
   const supabase = getServiceClient()
   const { data, error } = await supabase
     .from('contacts')
@@ -70,6 +89,7 @@ export async function createContact(
       consent_timestamp: marketing_consent ? new Date().toISOString() : null,
       lead_id: lead_id ?? null,
       tags,
+      custom_fields: cf.values,
     })
     .select('id')
     .single()
@@ -125,19 +145,44 @@ export async function updateContact(
   const { name, email, whatsapp_number, marketing_consent, lead_id, tags } =
     parsed.data
 
+  const defs = await getActiveCustomFieldDefs('contact')
+  const cf = validateCustomFields(
+    'contact',
+    defs,
+    parsed.data.custom_fields ?? {}
+  )
+  if (!cf.ok) {
+    return {
+      ok: false,
+      error: 'Please correct the highlighted fields.',
+      fieldErrors: toFieldErrors(cf.errors),
+    }
+  }
+
   const supabase = getServiceClient()
 
   // Resolve the current consent state so we only stamp a timestamp on the
   // transition into consent and preserve the original grant time otherwise.
   const { data: existing } = await supabase
     .from('contacts')
-    .select('marketing_consent, consent_timestamp')
+    .select('marketing_consent, consent_timestamp, custom_fields')
     .eq('id', id)
     .maybeSingle()
   const prior = existing as {
     marketing_consent: boolean | null
     consent_timestamp: string | null
+    custom_fields: Record<string, unknown> | null
   } | null
+
+  // Preserve values for inactive/deleted defs: drop the active-def keys from the
+  // existing custom_fields, then spread the freshly-validated values on top.
+  const activeKeys = new Set(defs.map((d) => d.key))
+  const preserved = Object.fromEntries(
+    Object.entries(prior?.custom_fields ?? {}).filter(
+      ([k]) => !activeKeys.has(k)
+    )
+  )
+  const mergedCustom = { ...preserved, ...cf.values }
 
   let consentTimestamp: string | null
   if (!marketing_consent) {
@@ -158,6 +203,7 @@ export async function updateContact(
       consent_timestamp: consentTimestamp,
       lead_id: lead_id ?? null,
       tags,
+      custom_fields: mergedCustom,
     })
     .eq('id', id)
 

@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { listProducts } from '@/features/products/actions'
 import { listContacts, searchLeads } from '@/features/records/queries'
+import { getActiveCustomFieldDefs } from '@/features/crm/custom-fields/queries'
 import { requireModuleView } from '@/features/rbac/guard'
 import DealForm from '../DealForm'
 
@@ -12,10 +13,11 @@ export const dynamic = 'force-dynamic'
 
 export default async function NewDealPage() {
   const ctx = await requireModuleView('deals')
-  const [products, contacts, leads] = await Promise.all([
+  const [products, contacts, leads, customFieldDefs] = await Promise.all([
     listProducts(),
     listContacts(''),
     searchLeads({}, undefined, ctx),
+    getActiveCustomFieldDefs('deal'),
   ])
 
   const activeProducts = products.filter((p) => p.active !== false)
@@ -45,6 +47,7 @@ export default async function NewDealPage() {
           whatsapp_number: c.whatsapp_number,
         }))}
         leads={leads.map((l) => ({ id: l.id, name: l.name, phone: l.phone }))}
+        customFieldDefs={customFieldDefs}
       />
     </div>
   )

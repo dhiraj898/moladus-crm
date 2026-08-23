@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { listProducts } from '@/features/products/actions'
+import { getActiveCustomFieldDefs } from '@/features/crm/custom-fields/queries'
 import LeadForm from '../LeadForm'
 
 /**
@@ -11,6 +12,7 @@ export const dynamic = 'force-dynamic'
 export default async function NewLeadPage() {
   const products = await listProducts()
   const activeProducts = products.filter((p) => p.active !== false)
+  const customFieldDefs = await getActiveCustomFieldDefs('lead')
 
   return (
     <div className="mx-auto max-w-[960px]">
@@ -28,7 +30,11 @@ export default async function NewLeadPage() {
           Hand-enter a lead that did not arrive through a form.
         </p>
       </div>
-      <LeadForm mode="create" products={activeProducts} />
+      <LeadForm
+        mode="create"
+        products={activeProducts}
+        customFieldDefs={customFieldDefs}
+      />
     </div>
   )
 }

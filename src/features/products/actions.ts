@@ -3,6 +3,11 @@
 import { revalidatePath } from 'next/cache'
 import { getServiceClient } from '@/lib/supabase/server'
 import { requirePermission } from '@/features/rbac/permissions'
+import { getActiveCustomFieldDefs } from '@/features/crm/custom-fields/queries'
+import {
+  validateCustomFields,
+  toFieldErrors,
+} from '@/features/crm/custom-fields/validate'
 import type { Product } from '@/lib/supabase/types'
 import { productSchema, type ProductInputRaw } from './schema'
 
@@ -66,11 +71,22 @@ export async function createProduct(
       fieldErrors: parsed.error.flatten().fieldErrors,
     }
   }
+  const { custom_fields: rawCustom, ...productData } = parsed.data
+
+  const defs = await getActiveCustomFieldDefs('product')
+  const cf = validateCustomFields('product', defs, rawCustom ?? {})
+  if (!cf.ok) {
+    return {
+      ok: false,
+      error: 'Please correct the highlighted fields.',
+      fieldErrors: toFieldErrors(cf.errors),
+    }
+  }
 
   const supabase = getServiceClient()
   const { data, error } = await supabase
     .from('products')
-    .insert(parsed.data)
+    .insert({ ...productData, custom_fields: cf.values })
     .select('*')
     .single()
 
@@ -105,11 +121,42 @@ export async function updateProduct(
       fieldErrors: parsed.error.flatten().fieldErrors,
     }
   }
+  const { custom_fields: rawCustom, ...productData } = parsed.data
+
+  const defs = await getActiveCustomFieldDefs('product')
+  const cf = validateCustomFields('product', defs, rawCustom ?? {})
+  if (!cf.ok) {
+    return {
+      ok: false,
+      error: 'Please correct the highlighted fields.',
+      fieldErrors: toFieldErrors(cf.errors),
+    }
+  }
 
   const supabase = getServiceClient()
+
+  // Preserve values for inactive/deleted defs: drop the active-def keys from the
+  // existing custom_fields, then spread the freshly-validated values on top.
+  const { data: existing } = await supabase
+    .from('products')
+    .select('custom_fields')
+    .eq('id', id)
+    .maybeSingle()
+  const activeKeys = new Set(defs.map((d) => d.key))
+  const preserved = Object.fromEntries(
+    Object.entries(
+      (existing?.custom_fields ?? {}) as Record<string, unknown>
+    ).filter(([k]) => !activeKeys.has(k))
+  )
+  const mergedCustom = { ...preserved, ...cf.values }
+
   const { data, error } = await supabase
     .from('products')
-    .update({ ...parsed.data, updated_at: new Date().toISOString() })
+    .update({
+      ...productData,
+      custom_fields: mergedCustom,
+      updated_at: new Date().toISOString(),
+    })
     .eq('id', id)
     .select('*')
     .single()

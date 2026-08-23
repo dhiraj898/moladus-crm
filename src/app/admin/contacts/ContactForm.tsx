@@ -2,12 +2,17 @@
 
 import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
-import type { Contact } from '@/lib/supabase/types'
+import type {
+  Contact,
+  CustomFieldDef,
+  CustomFieldValues,
+} from '@/lib/supabase/types'
 import {
   createContact,
   updateContact,
   type ActionResult,
 } from '@/features/crm/contacts/actions'
+import CustomFieldInputs from '@/features/crm/custom-fields/CustomFieldInputs'
 
 /**
  * Manual create / edit form for a single contact (spec §6). `whatsapp_number`
@@ -23,8 +28,18 @@ export interface ContactFormLead {
 }
 
 type Props =
-  | { mode: 'create'; leads: ContactFormLead[]; contact?: undefined }
-  | { mode: 'edit'; leads: ContactFormLead[]; contact: Contact }
+  | {
+      mode: 'create'
+      leads: ContactFormLead[]
+      customFieldDefs: CustomFieldDef[]
+      contact?: undefined
+    }
+  | {
+      mode: 'edit'
+      leads: ContactFormLead[]
+      customFieldDefs: CustomFieldDef[]
+      contact: Contact
+    }
 
 const inputClass =
   'rounded-[8px] border border-line bg-surface2 px-3.5 py-2.5 text-[15px] text-text outline-none transition-colors focus:border-accent'
@@ -51,7 +66,7 @@ function parseTags(raw: string): string[] {
 }
 
 export default function ContactForm(props: Props) {
-  const { mode, leads } = props
+  const { mode, leads, customFieldDefs } = props
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
 
@@ -66,6 +81,9 @@ export default function ContactForm(props: Props) {
   )
   const [leadId, setLeadId] = useState(props.contact?.lead_id ?? '')
   const [tags, setTags] = useState((props.contact?.tags ?? []).join(', '))
+  const [customFields, setCustomFields] = useState<CustomFieldValues>(
+    props.contact?.custom_fields ?? {}
+  )
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -79,6 +97,7 @@ export default function ContactForm(props: Props) {
       marketing_consent: consent,
       lead_id: leadId,
       tags: parseTags(tags),
+      custom_fields: customFields,
     }
 
     startTransition(async () => {
@@ -192,6 +211,13 @@ export default function ContactForm(props: Props) {
           className="h-4 w-4 accent-accent"
         />
       </label>
+
+      <CustomFieldInputs
+        defs={customFieldDefs}
+        values={customFields}
+        errors={fieldErrors}
+        onChange={setCustomFields}
+      />
 
       {formError ? (
         <p role="alert" className="text-sm text-red">

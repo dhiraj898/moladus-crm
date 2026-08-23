@@ -8,6 +8,8 @@ import ActivityTimeline from '@/features/crm/ActivityTimeline'
 import { requireModuleView } from '@/features/rbac/guard'
 import { can } from '@/features/rbac/can'
 import { listAssignableUsers } from '@/features/rbac/queries'
+import { getActiveCustomFieldDefs } from '@/features/crm/custom-fields/queries'
+import { CustomFieldsCard } from '@/features/crm/custom-fields/CustomFieldsCard'
 import AssignControl from './AssignControl'
 
 /**
@@ -121,6 +123,7 @@ export default async function LeadDetailPage({
 
   const { lead, owner_email, contact, deals } = detail
   const activity = await getActivityTimeline('lead', lead.id)
+  const customFieldDefs = await getActiveCustomFieldDefs('lead')
 
   // Manual reassignment is offered only to roles that can edit leads.
   const canEdit = can(ctx.permissions, 'leads', 'edit')
@@ -208,6 +211,8 @@ export default async function LeadDetailPage({
         </Card>
 
         <LinkedDealsCard deals={deals} />
+
+        <CustomFieldsCard defs={customFieldDefs} values={lead.custom_fields} />
 
         <Card title="UTM">
           {utm && Object.keys(utm).length > 0 ? (

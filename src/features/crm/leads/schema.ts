@@ -47,6 +47,9 @@ export const leadSchema = z.object({
   source: optionalText(120),
   status: z.enum(LEAD_STATUSES).default('new'),
   product_id: optionalUuid,
+  // Raw custom-field values keyed by def.key; validated separately by the
+  // data-driven `validateCustomFields` helper, not by this static schema.
+  custom_fields: z.record(z.string(), z.unknown()).optional().default({}),
 })
 
 /** Raw, pre-parse shape accepted by the schema (what callers pass in). */

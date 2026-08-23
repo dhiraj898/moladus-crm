@@ -6,6 +6,7 @@ import {
   listContacts,
   searchLeads,
 } from '@/features/records/queries'
+import { getActiveCustomFieldDefs } from '@/features/crm/custom-fields/queries'
 import { requireModuleView } from '@/features/rbac/guard'
 import DealForm from '../../DealForm'
 
@@ -26,10 +27,11 @@ export default async function EditDealPage({
   const timeline = await getDealTimeline(id, ctx)
   if (!timeline) notFound()
 
-  const [products, contacts, leads] = await Promise.all([
+  const [products, contacts, leads, customFieldDefs] = await Promise.all([
     listProducts(),
     listContacts(''),
     searchLeads({}, undefined, ctx),
+    getActiveCustomFieldDefs('deal'),
   ])
 
   // Keep the current product even if it is now inactive, so the edit form can
@@ -64,6 +66,7 @@ export default async function EditDealPage({
           whatsapp_number: c.whatsapp_number,
         }))}
         leads={leads.map((l) => ({ id: l.id, name: l.name, phone: l.phone }))}
+        customFieldDefs={customFieldDefs}
       />
     </div>
   )
