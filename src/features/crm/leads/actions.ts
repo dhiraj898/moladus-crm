@@ -10,7 +10,10 @@ import {
   validateCustomFields,
   toFieldErrors,
 } from '@/features/crm/custom-fields/validate'
-import { leadSchema, type LeadInputRaw } from './schema'
+import { leadSchema, LEAD_STATUSES, type LeadInputRaw } from './schema'
+
+/** A valid lead workflow status (the stored `leads.status` value). */
+export type LeadStatus = (typeof LEAD_STATUSES)[number]
 
 /**
  * Server actions for leads (spec §6 — Lead detail + manual create/edit).
@@ -102,6 +105,64 @@ export async function createLead(
   revalidatePath('/admin/leads')
   revalidatePath(`/admin/leads/${id}`)
   return { ok: true, data: { id } }
+}
+
+// ---------------------------------------------------------------------------
+// Status change (Kanban drag)
+// ---------------------------------------------------------------------------
+
+/**
+ * Move a lead to a new workflow status. Mirrors `changeDealStage`
+ * (`src/features/crm/deals/actions.ts`): asserts `leads.edit`, then — for an
+ * own-scope role — re-reads `leads.owner_id` and refuses a lead the caller does
+ * not own BEFORE mutating, so a forged action id cannot write a lead the caller
+ * cannot see. The target `status` must be one of {@link LEAD_STATUSES}. Updates
+ * `leads.status`, logs an `edited` activity carrying the new status, and
+ * revalidates the leads list.
+ */
+export async function changeLeadStatus(
+  leadId: string,
+  status: LeadStatus
+): Promise<ActionResult<void>> {
+  const gate = await requirePermission('leads', 'edit')
+  if (!gate.ok) return { ok: false, error: gate.error }
+  const { ctx } = gate
+
+  // Validate the target status against the canonical picklist.
+  if (!LEAD_STATUSES.includes(status)) {
+    return { ok: false, error: 'Invalid status.' }
+  }
+
+  const supabase = getServiceClient()
+
+  // Own-scope IDOR guard: re-read the row's owner_id and refuse when it is not
+  // the caller's — BEFORE mutating.
+  if (scopeFor(ctx.permissions, 'leads') === 'own') {
+    const { data: row } = await supabase
+      .from('leads')
+      .select('owner_id')
+      .eq('id', leadId)
+      .maybeSingle()
+    const owner = (row as { owner_id: string | null } | null)?.owner_id ?? null
+    if (owner !== ctx.user.id) return { ok: false, error: NOT_FOUND }
+  }
+
+  const { error } = await supabase
+    .from('leads')
+    .update({ status })
+    .eq('id', leadId)
+
+  if (error) {
+    return { ok: false, error: `Failed to change status: ${error.message}` }
+  }
+
+  await logActivity('lead', leadId, 'edited', {
+    actorId: ctx.user.id,
+    metadata: { status },
+  })
+
+  revalidatePath('/admin/leads')
+  return { ok: true, data: undefined }
 }
 
 // ---------------------------------------------------------------------------
