@@ -1,5 +1,6 @@
 import 'server-only'
 import { getServiceClient } from '@/lib/supabase/server'
+import { LEAD_STATUSES } from '@/features/crm/leads/schema'
 import { ownerScopeFilter } from '@/features/rbac/can'
 import type { CurrentUserWithRole } from '@/features/rbac/permissions'
 import type {
@@ -55,15 +56,6 @@ const PAYMENT_STATUSES: readonly PaymentStatus[] = [
   'paid',
   'failed',
   'refunded',
-]
-
-/** Valid lead workflow statuses (leads.status; `new` is the DB default). */
-const LEAD_STATUSES: readonly string[] = [
-  'new',
-  'contacted',
-  'qualified',
-  'converted',
-  'lost',
 ]
 
 /**

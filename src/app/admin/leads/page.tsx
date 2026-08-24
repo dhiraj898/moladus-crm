@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { searchLeads, type LeadFilters } from '@/features/records/queries'
+import { LEAD_STATUSES } from '@/features/crm/leads/schema'
 import { requireModuleView } from '@/features/rbac/guard'
 
 /**
@@ -10,14 +11,6 @@ import { requireModuleView } from '@/features/rbac/guard'
  * numeric-heavy views live on Deals.
  */
 export const dynamic = 'force-dynamic'
-
-const LEAD_STATUS_OPTIONS = [
-  'new',
-  'contacted',
-  'qualified',
-  'converted',
-  'lost',
-] as const
 
 function first(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value
@@ -101,7 +94,7 @@ export default async function LeadsPage({
             className="rounded-[8px] border border-line bg-bg px-3 py-2 text-sm text-text outline-none focus:border-accent"
           >
             <option value="">All</option>
-            {LEAD_STATUS_OPTIONS.map((s) => (
+            {LEAD_STATUSES.map((s) => (
               <option key={s} value={s}>
                 {s.charAt(0).toUpperCase() + s.slice(1)}
               </option>
@@ -174,7 +167,7 @@ export default async function LeadsPage({
                   </td>
                   <td className="px-4 py-3">
                     <span className="inline-flex items-center rounded-full bg-chip-bg px-2.5 py-1 text-xs font-medium text-dim">
-                      {lead.status ?? 'new'}
+                      {lead.status ?? 'Not Contacted'}
                     </span>
                   </td>
                   <td className="px-4 py-3 text-right tabular-nums text-dim">

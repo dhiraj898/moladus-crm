@@ -191,7 +191,7 @@ export default async function ContactDetailPage({
                 {lead.phone ?? '—'}
               </Row>
               <Row label="Source">{lead.source ?? '—'}</Row>
-              <Row label="Status">{lead.status ?? 'new'}</Row>
+              <Row label="Status">{lead.status ?? 'Not Contacted'}</Row>
             </dl>
           ) : (
             <p className="text-sm text-dim">
