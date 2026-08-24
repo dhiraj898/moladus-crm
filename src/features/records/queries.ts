@@ -1,6 +1,7 @@
 import 'server-only'
 import { getServiceClient } from '@/lib/supabase/server'
 import { LEAD_STATUSES } from '@/features/crm/leads/schema'
+import type { FormListItem } from '@/features/forms/queries'
 import { ownerScopeFilter } from '@/features/rbac/can'
 import type { CurrentUserWithRole } from '@/features/rbac/permissions'
 import type {
@@ -81,6 +82,16 @@ function pickFrom<T extends string>(
   return (allowed as readonly string[]).includes(value)
     ? (value as T)
     : undefined
+}
+
+/**
+ * Coerce a `'true'` / `'false'` filter value to a boolean, or `undefined` when
+ * the value is absent or anything else (so an unset tri-state filter is a no-op).
+ */
+function pickBool(value: string | undefined): boolean | undefined {
+  if (value === 'true') return true
+  if (value === 'false') return false
+  return undefined
 }
 
 /** Validate a UUID-shaped filter value; returns `undefined` otherwise. */
@@ -425,6 +436,140 @@ export async function listContacts(search = ''): Promise<ContactListItem[]> {
     const { deals, ...contact } = row
     return { ...contact, dealCount: deals?.[0]?.count ?? 0 }
   })
+}
+
+export interface ContactFilters {
+  /** Free-text search across name / email / whatsapp number. */
+  q?: string
+  /** Marketing-consent tri-state (`'true'` / `'false'`; anything else = all). */
+  consent?: string
+}
+
+/**
+ * List contacts with an optional name/email/whatsapp search term and a
+ * marketing-consent filter, each row carrying its linked-deal count. Returns at
+ * most {@link LIST_LIMIT} rows, newest first. Server-only; the free-text term is
+ * sanitised before it is interpolated into the PostgREST `or()` expression.
+ */
+export async function listContactsFiltered(
+  filters: ContactFilters = {}
+): Promise<ContactListItem[]> {
+  const supabase = getServiceClient()
+
+  let query = supabase
+    .from('contacts')
+    .select('*, deals:deals (count)')
+    .order('created_at', { ascending: false })
+    .limit(LIST_LIMIT)
+
+  const consent = pickBool(filters.consent)
+  if (consent !== undefined) query = query.eq('marketing_consent', consent)
+
+  const term = filters.q ? sanitizeSearch(filters.q) : ''
+  if (term) {
+    query = query.or(
+      `name.ilike.%${term}%,email.ilike.%${term}%,whatsapp_number.ilike.%${term}%`
+    )
+  }
+
+  const { data, error } = await query
+  if (error) throw new Error(`Failed to list contacts: ${error.message}`)
+
+  type Row = Contact & { deals: { count: number }[] | null }
+  return ((data ?? []) as unknown as Row[]).map((row) => {
+    const { deals, ...contact } = row
+    return { ...contact, dealCount: deals?.[0]?.count ?? 0 }
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Products
+// ---------------------------------------------------------------------------
+
+export interface ProductFilters {
+  /** Free-text search across name / code. */
+  q?: string
+  /** Active tri-state (`'true'` / `'false'`; anything else = all). */
+  active?: string
+}
+
+/**
+ * List products with an optional name/code search term and an active filter.
+ * Returns at most {@link LIST_LIMIT} rows, newest first. Server-only; the
+ * free-text term is sanitised before it is interpolated into the PostgREST
+ * `or()` expression.
+ */
+export async function listProductsFiltered(
+  filters: ProductFilters = {}
+): Promise<Product[]> {
+  const supabase = getServiceClient()
+
+  let query = supabase
+    .from('products')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(LIST_LIMIT)
+
+  const active = pickBool(filters.active)
+  if (active !== undefined) query = query.eq('active', active)
+
+  const term = filters.q ? sanitizeSearch(filters.q) : ''
+  if (term) {
+    query = query.or(`name.ilike.%${term}%,code.ilike.%${term}%`)
+  }
+
+  const { data, error } = await query
+  if (error) throw new Error(`Failed to list products: ${error.message}`)
+  return (data ?? []) as Product[]
+}
+
+// ---------------------------------------------------------------------------
+// Forms
+// ---------------------------------------------------------------------------
+
+/** Valid form statuses (mirrors the `FormStatus` DB check constraint). */
+const FORM_STATUSES = ['draft', 'published'] as const
+
+export interface FormFilters {
+  /** Free-text search across name / slug. */
+  q?: string
+  /** One of {@link FORM_STATUSES}; anything else = all. */
+  status?: string
+  /** Bound-product filter (UUID). */
+  productId?: string
+}
+
+/**
+ * List forms with an optional name/slug search term plus status and bound-product
+ * filters, each row joined with its product name. Returns at most
+ * {@link LIST_LIMIT} rows, newest first. Server-only; the free-text term is
+ * sanitised before it is interpolated into the PostgREST `or()` expression.
+ */
+export async function listFormsFiltered(
+  filters: FormFilters = {}
+): Promise<FormListItem[]> {
+  const supabase = getServiceClient()
+
+  let query = supabase
+    .from('forms')
+    .select('*, product:products (id, name, active)')
+    .order('created_at', { ascending: false })
+    .limit(LIST_LIMIT)
+
+  const status = pickFrom(filters.status, FORM_STATUSES)
+  if (status) query = query.eq('status', status)
+
+  const productId = pickUuid(filters.productId)
+  if (productId) query = query.eq('product_id', productId)
+
+  const term = filters.q ? sanitizeSearch(filters.q) : ''
+  if (term) {
+    query = query.or(`name.ilike.%${term}%,slug.ilike.%${term}%`)
+  }
+
+  const { data, error } = await query
+  if (error) throw new Error(`Failed to list forms: ${error.message}`)
+  return (data ?? []) as unknown as FormListItem[]
 }
 
 // ---------------------------------------------------------------------------
