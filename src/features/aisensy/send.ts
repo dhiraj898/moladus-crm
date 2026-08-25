@@ -6,14 +6,15 @@ import { logActivity } from '@/features/crm/activities/service'
 /**
  * AiSensy transactional WhatsApp sends (spec §9). Owned by Workstream 9.
  *
- * Two v1 templates:
- *   - `enrollment_link`    → fires on submission; carries student name + payment link
- *   - `enrollment_receipt` → fires on `paid`; carries student name + amount + product name
+ * All sends flow through the generic `sendWhatsAppTemplate` helper, driven by the
+ * on-enter action runner (`runStageActions`): the approved AiSensy template and
+ * its params come from `stage_actions` config, so confirmation/receipt messages
+ * are configured per stage rather than hardcoded here.
  *
  * Every send POSTs to the AiSensy campaign API, then writes a `notification_log`
  * row recording success/failure. Failures are logged and swallowed — a
  * notification failure must NEVER crash the caller (ingest pipeline or webhook),
- * so both wrappers return `{ ok: boolean }` and never throw.
+ * so the wrapper returns `{ ok: boolean }` and never throws.
  *
  * ENV-PENDING: live delivery needs `AISENSY_API_KEY` set in Railway and the two
  * templates approved in the AiSensy console under the exact campaign names above.
@@ -108,22 +109,5 @@ export async function sendWhatsAppTemplate(input: {
 }): Promise<SendResult> {
   const { ok, error } = await sendTemplate(input.template, input.whatsapp, input.params)
   await logNotification(input.dealId, input.template, ok, error)
-  return { ok }
-}
-
-export async function sendReceipt(input: {
-  dealId: string
-  name: string
-  whatsapp: string
-  amount: number
-  productName: string
-}): Promise<SendResult> {
-  const { ok, error } = await sendTemplate('enrollment_receipt', input.whatsapp, [
-    input.name,
-    // Coerce defensively: numeric columns can arrive as strings from supabase-js.
-    Number(input.amount).toFixed(2),
-    input.productName,
-  ])
-  await logNotification(input.dealId, 'enrollment_receipt', ok, error)
   return { ok }
 }

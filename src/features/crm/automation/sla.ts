@@ -1,7 +1,7 @@
 import 'server-only'
 import { getServiceClient } from '@/lib/supabase/server'
 import { evaluateCondition } from './conditions'
-import { runStageActions } from './runActions'
+import { moveDealStageAsSystem } from './moveStage'
 import { sendWhatsAppTemplate } from '@/features/aisensy/send'
 import { logActivity } from '@/features/crm/activities/service'
 import type { Contact, Deal, Product, SlaRule } from '@/lib/supabase/types'
@@ -190,20 +190,12 @@ async function dispatchSendWhatsApp(supabase: Supa, rule: SlaRule, deal: Deal): 
 
 /**
  * `move_stage` SLA action — move the deal to `config.to_stage_id` as a SYSTEM
- * actor and run that stage's on-enter actions.
- *
- * We deliberately do NOT call the exported `changeDealStage` server action: it
- * is `'use server'` (so its arguments are client-controllable) and is auth-gated
- * via `getCurrentUser()`. The scanner runs from the cron route with no user
- * session, and adding a bypass argument to a client-invocable action would be an
- * auth hole. Instead we reproduce `changeDealStage`'s committed effects here —
- * update `stage_id` + `stage_entered_at`, append a `deal_stage_events` row with a
- * NULL (system) actor, log a `stage_change` activity — and then invoke
- * `runStageActions` on the destination, so the SLA move triggers the same
- * on-enter actions as any other transition (design §5.1). `move_stage` is not a
- * valid on-enter action, so this cannot recurse into another move.
+ * actor and run that stage's on-enter actions, via the shared
+ * `moveDealStageAsSystem` helper (design §5.1). The no-target guard and its
+ * `sla_failed` activity log stay here (SLA-specific); the committed move effects
+ * live in the shared helper so the webhook can reuse them.
  */
-async function dispatchMoveStage(supabase: Supa, rule: SlaRule, deal: Deal): Promise<void> {
+async function dispatchMoveStage(_supabase: Supa, rule: SlaRule, deal: Deal): Promise<void> {
   const toStageId =
     typeof rule.config.to_stage_id === 'string' ? rule.config.to_stage_id.trim() : ''
   if (!toStageId) {
@@ -214,45 +206,7 @@ async function dispatchMoveStage(supabase: Supa, rule: SlaRule, deal: Deal): Pro
     return
   }
 
-  // Resolve human-readable stage names for the timeline entry (best-effort).
-  const fromStageId = deal.stage_id
-  const ids = Array.from(new Set([fromStageId, toStageId].filter(Boolean))) as string[]
-  const nameById = new Map<string, string>()
-  const { data: stageRows } = await supabase.from('stages').select('id, name').in('id', ids)
-  for (const s of ((stageRows ?? []) as { id: string; name: string }[])) {
-    nameById.set(s.id, s.name)
-  }
-
-  const now = new Date().toISOString()
-
-  const { error: updateError } = await supabase
-    .from('deals')
-    .update({ stage_id: toStageId, stage_entered_at: now, updated_at: now })
-    .eq('id', deal.id)
-  if (updateError) {
-    throw new Error(`move_stage update failed: ${updateError.message}`)
-  }
-
-  // Audit trail — system move, so actor_id is null.
-  await supabase.from('deal_stage_events').insert({
-    deal_id: deal.id,
-    stage_id: toStageId,
-    actor_id: null,
-    entered_at: now,
-  })
-
-  await logActivity('deal', deal.id, 'stage_change', {
-    actorId: null,
-    metadata: {
-      from: fromStageId ? (nameById.get(fromStageId) ?? null) : null,
-      to: nameById.get(toStageId) ?? null,
-      via: 'sla',
-      sla_rule_id: rule.id,
-    },
-  })
-
-  // Fire the destination stage's on-enter actions (send WhatsApp / create link).
-  await runStageActions(deal.id, toStageId)
+  await moveDealStageAsSystem(deal.id, toStageId, { via: 'sla', fromStageId: deal.stage_id })
 }
 
 async function loadContact(
