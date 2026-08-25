@@ -14,9 +14,13 @@ import type {
   GroupColumn,
   ViewMode,
 } from '@/features/views/types'
-import { changeLeadStatus, type LeadStatus } from '@/features/crm/leads/actions'
+import {
+  changeLeadStatus,
+  loadLeadColumnRows,
+  type LeadStatus,
+} from '@/features/crm/leads/actions'
 import { LEAD_STATUSES } from '@/features/crm/leads/schema'
-import type { LeadListItem } from '@/features/records/queries'
+import type { LeadFilters, LeadListItem } from '@/features/records/queries'
 
 /**
  * Client view host for the Leads list (plan Task 3.2). Owns the view-mode
@@ -44,7 +48,8 @@ function formatDate(iso: string | null): string {
 }
 
 export default function LeadsViews({
-  leads,
+  boardRows,
+  boardTotals,
   pagedLeads,
   pagination,
   products,
@@ -52,8 +57,10 @@ export default function LeadsViews({
   owners,
   filterValues,
 }: {
-  /** Full (kanban) set — grouped by status, drag-to-move. */
-  leads: LeadListItem[]
+  /** Kanban first page per status (+ `__unassigned`), drag-to-move + paged. */
+  boardRows: Record<string, LeadListItem[]>
+  /** Total leads per status (+ `__unassigned`) for the Kanban "N of TOTAL". */
+  boardTotals: Record<string, number>
   /** The current Table/List page window (RBAC-scoped, filtered, paged). */
   pagedLeads: LeadListItem[]
   /** Page footer state for Table/List (total across all pages). */
@@ -158,13 +165,23 @@ export default function LeadsViews({
       {mode === 'kanban' ? (
         <KanbanBoard
           columns={groupColumns}
-          cards={leads}
+          initialRows={boardRows}
+          totals={boardTotals}
           card={card}
           getCardId={(l) => l.id}
-          getColumnId={(l) => l.status}
           onMove={(cardId, toColumnId) =>
             changeLeadStatus(cardId, toColumnId as LeadStatus)
           }
+          onLoadMore={async (columnId, offset) => {
+            const res = await loadLeadColumnRows({
+              columnId,
+              offset,
+              filters: filterValues as LeadFilters,
+            })
+            return res.ok
+              ? { ok: true, rows: res.data.rows, total: res.data.total }
+              : { ok: false, error: res.error }
+          }}
         />
       ) : mode === 'table' ? (
         <TableView

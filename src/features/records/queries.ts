@@ -1,6 +1,8 @@
 import 'server-only'
 import { getServiceClient } from '@/lib/supabase/server'
 import { LEAD_STATUSES } from '@/features/crm/leads/schema'
+import { listStages } from '@/features/crm/stages/queries'
+import { UNASSIGNED } from '@/features/views/group'
 import type { FormListItem } from '@/features/forms/queries'
 import { ownerScopeFilter } from '@/features/rbac/can'
 import type { CurrentUserWithRole } from '@/features/rbac/permissions'
@@ -189,18 +191,21 @@ const LEAD_SELECT = '*, product:products (id, name), form:forms (id, name)'
  * {@link searchLeads} (array) and {@link searchLeadsPaged} ({rows,total}) so the
  * scope + filter logic lives in exactly one place — a page/offset param can
  * never widen the RBAC scope because the scope is re-derived here every call.
- * When `withCount` is set, the count of the full matching set is requested.
+ * When `withCount` is set, the count of the full matching set is requested; with
+ * `head` also set no rows are returned (a count-only probe, used by the grouped
+ * Kanban counts).
  */
 function buildLeadsQuery(
   filters: LeadFilters,
   ctx: CurrentUserWithRole | undefined,
-  withCount: boolean
+  withCount: boolean,
+  head = false
 ) {
   const supabase = getServiceClient()
 
   let query = supabase
     .from('leads')
-    .select(LEAD_SELECT, withCount ? { count: 'exact' } : undefined)
+    .select(LEAD_SELECT, withCount ? { count: 'exact', head } : undefined)
 
   // Ordering: a validated sort key (default `created_desc`), always ending on
   // `id` so paging stays deterministic across rows sharing the sort column.
@@ -393,13 +398,14 @@ function buildDealsQuery(
   filters: DealFilters,
   ctx: CurrentUserWithRole | undefined,
   searchIds: Exclude<DealSearchIds, 'no-match'>,
-  withCount: boolean
+  withCount: boolean,
+  head = false
 ) {
   const supabase = getServiceClient()
 
   let query = supabase
     .from('deals')
-    .select(DEAL_SELECT, withCount ? { count: 'exact' } : undefined)
+    .select(DEAL_SELECT, withCount ? { count: 'exact', head } : undefined)
 
   // Ordering: a validated sort key (default `created_desc`), always ending on
   // `id` so paging stays deterministic across rows sharing the sort column.
@@ -509,6 +515,167 @@ export async function listDealsPaged(
   const { data, error, count } = await query
   if (error) throw new Error(`Failed to list deals: ${error.message}`)
   return { rows: ((data ?? []) as unknown[]).map(toDealListItem), total: count ?? 0 }
+}
+
+// ---------------------------------------------------------------------------
+// Kanban paging (Deals by stage, Leads by status) — plan Task 3.1
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-column grouped counts for the Deals Kanban board: the number of deals in
+ * each pipeline stage under the same RBAC scope + active filters as the board
+ * itself, plus an {@link UNASSIGNED} key for deals with no stage. Reuses
+ * {@link buildDealsQuery} (a count-only `head` probe per column) so the scope +
+ * filter logic lives in one place — a client cannot widen scope through a column
+ * param. A free-text term matching no contact/product yields all-zero counts.
+ */
+export async function dealStageCounts(
+  filters: DealFilters,
+  ctx?: CurrentUserWithRole
+): Promise<Record<string, number>> {
+  const term = filters.q ? sanitizeSearch(filters.q) : ''
+  const searchIds = await resolveDealSearchIds(term)
+  const stages = await listStages()
+
+  const out: Record<string, number> = {}
+  for (const s of stages) out[s.id] = 0
+  out[UNASSIGNED] = 0
+  if (searchIds === 'no-match') return out
+
+  // `null` = the synthetic Unassigned column (deals with no stage_id).
+  const ids: (string | null)[] = [...stages.map((s) => s.id), null]
+  await Promise.all(
+    ids.map(async (id) => {
+      const base = buildDealsQuery(filters, ctx, searchIds, true, true)
+      const q = id === null ? base.is('stage_id', null) : base.eq('stage_id', id)
+      const { count, error } = await q
+      if (error) throw new Error(`Failed to count deals: ${error.message}`)
+      out[id ?? UNASSIGNED] = count ?? 0
+    })
+  )
+  return out
+}
+
+/**
+ * Per-column grouped counts for the Leads Kanban board: the number of leads in
+ * each canonical {@link LEAD_STATUSES} status under the same RBAC scope + active
+ * filters as the board, plus an {@link UNASSIGNED} key for leads with a null
+ * status. Reuses {@link buildLeadsQuery} (a count-only `head` probe per column)
+ * so scope + filters live in one place.
+ */
+export async function leadStatusCounts(
+  filters: LeadFilters,
+  ctx?: CurrentUserWithRole
+): Promise<Record<string, number>> {
+  const out: Record<string, number> = {}
+  for (const s of LEAD_STATUSES) out[s] = 0
+  out[UNASSIGNED] = 0
+
+  const ids: (string | null)[] = [...LEAD_STATUSES, null]
+  await Promise.all(
+    ids.map(async (id) => {
+      const base = buildLeadsQuery(filters, ctx, true, true)
+      const q = id === null ? base.is('status', null) : base.eq('status', id)
+      const { count, error } = await q
+      if (error) throw new Error(`Failed to count leads: ${error.message}`)
+      out[id ?? UNASSIGNED] = count ?? 0
+    })
+  )
+  return out
+}
+
+/** Discriminated args for {@link loadColumnRows} — a deals column window. */
+interface DealColumnArgs {
+  entity: 'deals'
+  /** Stage id, or {@link UNASSIGNED} for the no-stage column. */
+  columnId: string
+  offset: number
+  limit: number
+  filters: DealFilters
+  ctx?: CurrentUserWithRole
+}
+
+/** Discriminated args for {@link loadColumnRows} — a leads column window. */
+interface LeadColumnArgs {
+  entity: 'leads'
+  /** Lead status, or {@link UNASSIGNED} for the null-status column. */
+  columnId: string
+  offset: number
+  limit: number
+  filters: LeadFilters
+  ctx?: CurrentUserWithRole
+}
+
+export type LoadColumnRowsArgs = DealColumnArgs | LeadColumnArgs
+
+export async function loadColumnRows(
+  args: DealColumnArgs
+): Promise<PagedResult<DealListItem>>
+export async function loadColumnRows(
+  args: LeadColumnArgs
+): Promise<PagedResult<LeadListItem>>
+/**
+ * Fetch one Kanban column's `[offset, offset + limit)` window plus its `total`
+ * count, for the board's initial per-column page and each "Load more" (plan Task
+ * 3.1). Deals are windowed by `stage_id`, leads by `status`; the {@link
+ * UNASSIGNED} sentinel windows the null-dimension column. Ordering is
+ * `created_at desc, id desc` (the builders' default sort), so paging never skips
+ * or repeats a row sharing a `created_at`.
+ *
+ * RBAC scope + every active filter are re-derived server-side in the shared
+ * builders on every call, so a forged `columnId`/`offset` can only re-window a
+ * column the caller may already see — it can never widen the owner scope. An
+ * invalid `columnId` (a non-uuid deal stage, a non-canonical lead status)
+ * returns an empty window rather than erroring.
+ */
+export async function loadColumnRows(
+  args: LoadColumnRowsArgs
+): Promise<PagedResult<DealListItem | LeadListItem>> {
+  const from = Math.max(0, Math.floor(args.offset))
+  const to = from + Math.max(1, Math.floor(args.limit)) - 1
+
+  if (args.entity === 'deals') {
+    const { columnId, filters, ctx } = args
+    // Validate the column before it reaches PostgREST: a non-uuid, non-sentinel
+    // stage id would otherwise fault the `.eq`.
+    if (columnId !== UNASSIGNED && !pickUuid(columnId)) {
+      return { rows: [], total: 0 }
+    }
+    const term = filters.q ? sanitizeSearch(filters.q) : ''
+    const searchIds = await resolveDealSearchIds(term)
+    if (searchIds === 'no-match') return { rows: [], total: 0 }
+
+    const base = buildDealsQuery(filters, ctx, searchIds, true)
+    const scoped =
+      columnId === UNASSIGNED
+        ? base.is('stage_id', null)
+        : base.eq('stage_id', columnId)
+    const { data, error, count } = await scoped.range(from, to)
+    if (error) throw new Error(`Failed to load deals column: ${error.message}`)
+    return {
+      rows: ((data ?? []) as unknown[]).map(toDealListItem),
+      total: count ?? 0,
+    }
+  }
+
+  const { columnId, filters, ctx } = args
+  if (
+    columnId !== UNASSIGNED &&
+    !(LEAD_STATUSES as readonly string[]).includes(columnId)
+  ) {
+    return { rows: [], total: 0 }
+  }
+  const base = buildLeadsQuery(filters, ctx, true)
+  const scoped =
+    columnId === UNASSIGNED
+      ? base.is('status', null)
+      : base.eq('status', columnId)
+  const { data, error, count } = await scoped.range(from, to)
+  if (error) throw new Error(`Failed to load leads column: ${error.message}`)
+  return {
+    rows: (data ?? []) as unknown as LeadListItem[],
+    total: count ?? 0,
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -10,6 +10,12 @@ import {
   validateCustomFields,
   toFieldErrors,
 } from '@/features/crm/custom-fields/validate'
+import {
+  loadColumnRows,
+  type LeadFilters,
+  type LeadListItem,
+} from '@/features/records/queries'
+import { columnWindow } from '@/features/views/kanbanPaging'
 import { leadSchema, LEAD_STATUSES, type LeadInputRaw } from './schema'
 
 /** A valid lead workflow status (the stored `leads.status` value). */
@@ -163,6 +169,40 @@ export async function changeLeadStatus(
 
   revalidatePath('/admin/leads')
   return { ok: true, data: undefined }
+}
+
+// ---------------------------------------------------------------------------
+// Kanban "Load more" (per-column paging) — plan Task 3.2
+// ---------------------------------------------------------------------------
+
+/**
+ * Fetch the next window of leads for one Kanban column (a status), for the
+ * board's "Load more" button. View-gated by `leads.view`; the RBAC own-vs-all
+ * scope + every active filter are re-derived server-side inside
+ * {@link loadColumnRows}, so the client cannot widen its scope through the
+ * `columnId`/`offset` params. The offset is clamped to a safe window by
+ * {@link columnWindow}. Returns the window's `rows` plus the column's fresh
+ * `total`.
+ */
+export async function loadLeadColumnRows(input: {
+  columnId: string
+  offset: number
+  filters?: LeadFilters
+}): Promise<ActionResult<{ rows: LeadListItem[]; total: number }>> {
+  const gate = await requirePermission('leads', 'view')
+  if (!gate.ok) return { ok: false, error: gate.error }
+  const { ctx } = gate
+
+  const window = columnWindow(input.offset)
+  const { rows, total } = await loadColumnRows({
+    entity: 'leads',
+    columnId: input.columnId,
+    offset: window.offset,
+    limit: window.limit,
+    filters: input.filters ?? {},
+    ctx,
+  })
+  return { ok: true, data: { rows, total } }
 }
 
 // ---------------------------------------------------------------------------

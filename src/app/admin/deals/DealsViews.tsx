@@ -14,10 +14,10 @@ import type {
   GroupColumn,
   ViewMode,
 } from '@/features/views/types'
-import { changeDealStage } from '@/features/crm/deals/actions'
+import { changeDealStage, loadDealColumnRows } from '@/features/crm/deals/actions'
 import { formatMoney } from '@/features/form-engine/estimate'
 import PaymentStatusChip from '@/features/records/PaymentStatusChip'
-import type { DealListItem } from '@/features/records/queries'
+import type { DealFilters, DealListItem } from '@/features/records/queries'
 import type { PaymentStatus } from '@/lib/supabase/types'
 
 /**
@@ -67,15 +67,18 @@ function formatDate(iso: string | null): string {
 }
 
 export default function DealsViews({
-  deals,
+  boardRows,
+  boardTotals,
   pagedDeals,
   pagination,
   stages,
   owners,
   filterValues,
 }: {
-  /** Full (kanban) set — grouped by stage, drag-to-move. */
-  deals: DealListItem[]
+  /** Kanban first page per stage id (+ `__unassigned`), drag-to-move + paged. */
+  boardRows: Record<string, DealListItem[]>
+  /** Total deals per stage id (+ `__unassigned`) for the Kanban "N of TOTAL". */
+  boardTotals: Record<string, number>
   /** The current Table/List page window (RBAC-scoped, filtered, paged). */
   pagedDeals: DealListItem[]
   /** Page footer state for Table/List (total across all pages). */
@@ -189,11 +192,21 @@ export default function DealsViews({
       {mode === 'kanban' ? (
         <KanbanBoard
           columns={groupColumns}
-          cards={deals}
+          initialRows={boardRows}
+          totals={boardTotals}
           card={card}
           getCardId={(d) => d.id}
-          getColumnId={(d) => d.stage_id}
           onMove={(cardId, toColumnId) => changeDealStage(cardId, toColumnId)}
+          onLoadMore={async (columnId, offset) => {
+            const res = await loadDealColumnRows({
+              columnId,
+              offset,
+              filters: filterValues as DealFilters,
+            })
+            return res.ok
+              ? { ok: true, rows: res.data.rows, total: res.data.total }
+              : { ok: false, error: res.error }
+          }}
         />
       ) : mode === 'table' ? (
         <TableView
