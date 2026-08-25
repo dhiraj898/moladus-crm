@@ -294,7 +294,7 @@ export async function POST(req: Request): Promise<Response> {
       source: boundLead.source ?? null,
       utm,
       raw_payload: { answers: answers as Json, store_only: storeOnly as Json },
-      status: 'new',
+      status: 'Not Contacted',
     })
     .select('id')
     .single()

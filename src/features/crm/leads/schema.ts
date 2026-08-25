@@ -10,13 +10,20 @@ import { z } from 'zod'
  * the optional fields stay optional, and are stored as `null`.
  */
 
-/** Valid lead workflow statuses (mirrors `leads.status`; `new` is the default). */
+/**
+ * Valid lead workflow statuses (mirrors `leads.status`; `Not Contacted` is the
+ * default). Replicated 1:1 from the Zoho CRM Lead_Status picklist — the stored
+ * value is the Zoho display label, so no separate label map is needed.
+ */
 export const LEAD_STATUSES = [
-  'new',
-  'contacted',
-  'qualified',
-  'converted',
-  'lost',
+  'Not Contacted',
+  'Attempted to Contact',
+  'Contacted',
+  'Contact in Future',
+  'Pre-Qualified',
+  'Not Qualified',
+  'Junk Lead',
+  'Lost Lead',
 ] as const
 
 /** Normalise `''` / `null` → `undefined` then apply an optional string schema. */
@@ -45,7 +52,7 @@ export const leadSchema = z.object({
   phone: optionalText(40),
   state: optionalText(60),
   source: optionalText(120),
-  status: z.enum(LEAD_STATUSES).default('new'),
+  status: z.enum(LEAD_STATUSES).default('Not Contacted'),
   product_id: optionalUuid,
   // Raw custom-field values keyed by def.key; validated separately by the
   // data-driven `validateCustomFields` helper, not by this static schema.

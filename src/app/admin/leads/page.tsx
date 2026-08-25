@@ -1,36 +1,25 @@
 import Link from 'next/link'
 import { searchLeads, type LeadFilters } from '@/features/records/queries'
+import { listProducts } from '@/features/products/actions'
+import { listForms } from '@/features/forms/queries'
+import { listAssignableUsers } from '@/features/rbac/queries'
 import { requireModuleView } from '@/features/rbac/guard'
+import { scopeFor } from '@/features/rbac/can'
+import LeadsViews from './LeadsViews'
 
 /**
- * Leads list (spec §10 — Leads list; plan Task 11.1). Server component: reads
- * leads through the service-role client with name/phone/email search and
- * product/form/status filters supplied as query params, and renders the
- * design-system table. Amounts are not shown here (leads pre-date pricing); the
- * numeric-heavy views live on Deals.
+ * Leads list (spec §10 — Leads list; plan Task 3.2). Server component: resolves
+ * the RBAC ctx, loads the filtered, scope-respecting lead set plus the product /
+ * form option sets (and — for all-scope roles only — the owner options), then
+ * hands everything to the client {@link LeadsViews} which owns the
+ * Kanban / Table / List switch. All filtering + search runs server-side through
+ * the service-role client; own-vs-all scope is enforced inside `searchLeads`.
+ * Kanban is grouped by `LEAD_STATUSES`; dragging a card fires `changeLeadStatus`.
  */
 export const dynamic = 'force-dynamic'
 
-const LEAD_STATUS_OPTIONS = [
-  'new',
-  'contacted',
-  'qualified',
-  'converted',
-  'lost',
-] as const
-
 function first(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value
-}
-
-function formatDateTime(iso: string | null): string {
-  if (!iso) return '—'
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return '—'
-  return new Intl.DateTimeFormat('en-IN', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  }).format(d)
 }
 
 export default async function LeadsPage({
@@ -40,13 +29,39 @@ export default async function LeadsPage({
 }) {
   const ctx = await requireModuleView('leads')
   const sp = await searchParams
+
   const filters: LeadFilters = {
     q: first(sp.q),
     status: first(sp.status),
     productId: first(sp.productId),
     formId: first(sp.formId),
+    ownerId: first(sp.ownerId),
+    from: first(sp.from),
+    to: first(sp.to),
+    sort: first(sp.sort),
   }
-  const leads = await searchLeads(filters, undefined, ctx)
+
+  const allScope = scopeFor(ctx.permissions, 'leads') === 'all'
+
+  const [leads, products, forms, owners] = await Promise.all([
+    searchLeads(filters, undefined, ctx),
+    listProducts(),
+    listForms(),
+    allScope ? listAssignableUsers() : Promise.resolve([]),
+  ])
+
+  // Seed the FilterBar controls from the current URL params (design: filters
+  // live in the URL so a view switch preserves them and links are shareable).
+  const filterValues: Record<string, string> = {
+    q: filters.q ?? '',
+    status: filters.status ?? '',
+    productId: filters.productId ?? '',
+    formId: filters.formId ?? '',
+    ownerId: filters.ownerId ?? '',
+    from: filters.from ?? '',
+    to: filters.to ?? '',
+    sort: filters.sort ?? '',
+  }
 
   const exportParams = new URLSearchParams({ type: 'leads' })
   if (filters.q) exportParams.set('q', filters.q)
@@ -63,7 +78,7 @@ export default async function LeadsPage({
             Every enrollment submission, newest first.
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
           <a
             href={`/api/admin/export?${exportParams.toString()}`}
             className="rounded-[8px] border border-line bg-surface px-4 py-2.5 text-sm font-semibold text-text transition-colors hover:bg-surface2"
@@ -79,113 +94,13 @@ export default async function LeadsPage({
         </div>
       </div>
 
-      <form
-        method="get"
-        className="mb-5 flex flex-wrap items-end gap-3 rounded-[12px] border border-line bg-surface p-4"
-      >
-        <label className="flex min-w-[220px] flex-1 flex-col gap-1.5">
-          <span className="text-xs font-semibold text-dim">Search</span>
-          <input
-            type="text"
-            name="q"
-            defaultValue={filters.q ?? ''}
-            placeholder="Name, phone or email"
-            className="rounded-[8px] border border-line bg-bg px-3 py-2 text-sm text-text outline-none placeholder:text-faint focus:border-accent"
-          />
-        </label>
-        <label className="flex flex-col gap-1.5">
-          <span className="text-xs font-semibold text-dim">Status</span>
-          <select
-            name="status"
-            defaultValue={filters.status ?? ''}
-            className="rounded-[8px] border border-line bg-bg px-3 py-2 text-sm text-text outline-none focus:border-accent"
-          >
-            <option value="">All</option>
-            {LEAD_STATUS_OPTIONS.map((s) => (
-              <option key={s} value={s}>
-                {s.charAt(0).toUpperCase() + s.slice(1)}
-              </option>
-            ))}
-          </select>
-        </label>
-        <div className="flex gap-2">
-          <button
-            type="submit"
-            className="rounded-[8px] bg-accent px-4 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90"
-          >
-            Apply
-          </button>
-          <Link
-            href="/admin/leads"
-            className="rounded-[8px] border border-line bg-surface px-4 py-2 text-sm font-medium text-dim transition-colors hover:bg-surface2 hover:text-text"
-          >
-            Reset
-          </Link>
-        </div>
-      </form>
-
-      {leads.length === 0 ? (
-        <div className="rounded-[12px] border border-line bg-surface px-6 py-16 text-center">
-          <p className="text-sm font-medium text-text">No leads found</p>
-          <p className="mt-1 text-sm text-dim">
-            Adjust the filters or wait for new submissions to arrive.
-          </p>
-        </div>
-      ) : (
-        <div className="overflow-x-auto rounded-[12px] border border-line">
-          <table className="w-full border-collapse text-sm">
-            <thead>
-              <tr className="border-b border-line text-left">
-                <th className="px-4 py-3 font-semibold text-dim">Name</th>
-                <th className="px-4 py-3 font-semibold text-dim">Contact</th>
-                <th className="px-4 py-3 font-semibold text-dim">Product</th>
-                <th className="px-4 py-3 font-semibold text-dim">Form</th>
-                <th className="px-4 py-3 font-semibold text-dim">Status</th>
-                <th className="px-4 py-3 text-right font-semibold text-dim">
-                  Submitted
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {leads.map((lead) => (
-                <tr
-                  key={lead.id}
-                  className="border-b border-line last:border-b-0 transition-colors hover:bg-surface"
-                >
-                  <td className="px-4 py-3 font-medium text-text">
-                    <Link
-                      href={`/admin/leads/${lead.id}`}
-                      className="transition-opacity hover:opacity-80"
-                    >
-                      {lead.name ?? 'View lead'}
-                    </Link>
-                  </td>
-                  <td className="px-4 py-3 text-dim">
-                    <div className="tabular-nums">{lead.phone ?? '—'}</div>
-                    {lead.email ? (
-                      <div className="text-faint">{lead.email}</div>
-                    ) : null}
-                  </td>
-                  <td className="px-4 py-3 text-dim">
-                    {lead.product?.name ?? '—'}
-                  </td>
-                  <td className="px-4 py-3 text-dim">
-                    {lead.form?.name ?? '—'}
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className="inline-flex items-center rounded-full bg-chip-bg px-2.5 py-1 text-xs font-medium text-dim">
-                      {lead.status ?? 'new'}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-right tabular-nums text-dim">
-                    {formatDateTime(lead.created_at)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      <LeadsViews
+        leads={leads}
+        products={products.map((p) => ({ id: p.id, name: p.name }))}
+        forms={forms.map((f) => ({ id: f.id, name: f.name }))}
+        owners={owners.map((u) => ({ id: u.id, label: u.email ?? u.id }))}
+        filterValues={filterValues}
+      />
     </div>
   )
 }

@@ -168,7 +168,7 @@ export default async function LeadDetailPage({
             </Row>
             <Row label="State">{lead.state ?? '—'}</Row>
             <Row label="Source">{lead.source ?? '—'}</Row>
-            <Row label="Status">{lead.status ?? 'new'}</Row>
+            <Row label="Status">{lead.status ?? 'Not Contacted'}</Row>
             <Row label="Owner">{owner_email ?? '—'}</Row>
             {canEdit ? (
               <div className="flex items-center justify-between gap-4 border-b border-line py-2.5 last:border-b-0">

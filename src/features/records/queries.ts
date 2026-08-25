@@ -1,5 +1,7 @@
 import 'server-only'
 import { getServiceClient } from '@/lib/supabase/server'
+import { LEAD_STATUSES } from '@/features/crm/leads/schema'
+import type { FormListItem } from '@/features/forms/queries'
 import { ownerScopeFilter } from '@/features/rbac/can'
 import type { CurrentUserWithRole } from '@/features/rbac/permissions'
 import type {
@@ -57,15 +59,6 @@ const PAYMENT_STATUSES: readonly PaymentStatus[] = [
   'refunded',
 ]
 
-/** Valid lead workflow statuses (leads.status; `new` is the DB default). */
-const LEAD_STATUSES: readonly string[] = [
-  'new',
-  'contacted',
-  'qualified',
-  'converted',
-  'lost',
-]
-
 /**
  * Strip characters that carry meaning in a PostgREST filter expression or an
  * ILIKE pattern, so a free-text term is only ever matched literally. Removes
@@ -89,6 +82,16 @@ function pickFrom<T extends string>(
   return (allowed as readonly string[]).includes(value)
     ? (value as T)
     : undefined
+}
+
+/**
+ * Coerce a `'true'` / `'false'` filter value to a boolean, or `undefined` when
+ * the value is absent or anything else (so an unset tri-state filter is a no-op).
+ */
+function pickBool(value: string | undefined): boolean | undefined {
+  if (value === 'true') return true
+  if (value === 'false') return false
+  return undefined
 }
 
 /** Validate a UUID-shaped filter value; returns `undefined` otherwise. */
@@ -129,6 +132,38 @@ export interface LeadFilters {
   productId?: string
   formId?: string
   status?: string
+  /** Owner filter (applied only for RBAC all-scope callers). */
+  ownerId?: string
+  /** Inclusive lower bound on created_at (`YYYY-MM-DD` or ISO). */
+  from?: string
+  /** Inclusive upper bound on created_at (`YYYY-MM-DD` or ISO). */
+  to?: string
+  /** One of {@link LEAD_SORTS}; defaults to `created_desc`. */
+  sort?: string
+}
+
+/**
+ * Valid lead sort keys mapped to their ordered `[column, ascending]` pairs.
+ * Every key ends on `id` as a stable secondary tiebreaker so paging is
+ * deterministic. Unknown keys fall back to `created_desc`.
+ */
+const LEAD_SORTS: Record<string, [column: string, ascending: boolean][]> = {
+  created_desc: [
+    ['created_at', false],
+    ['id', false],
+  ],
+  created_asc: [
+    ['created_at', true],
+    ['id', true],
+  ],
+  name_asc: [
+    ['name', true],
+    ['id', true],
+  ],
+  name_desc: [
+    ['name', false],
+    ['id', false],
+  ],
 }
 
 export type LeadListItem = Lead & {
@@ -159,13 +194,23 @@ export async function searchLeads(
   let query = supabase
     .from('leads')
     .select('*, product:products (id, name), form:forms (id, name)')
-    .order('created_at', { ascending: false })
-    .order('id', { ascending: false })
 
-  // Own-scope roles see only leads they are assigned (owner_id).
+  // Ordering: a validated sort key (default `created_desc`), always ending on
+  // `id` so paging stays deterministic across rows sharing the sort column.
+  const sort = LEAD_SORTS[filters.sort ?? ''] ?? LEAD_SORTS.created_desc
+  for (const [column, ascending] of sort) {
+    query = query.order(column, { ascending })
+  }
+
+  // Own-scope roles see only leads they are assigned (owner_id); all-scope
+  // callers may additionally narrow to a specific owner via the filter.
   if (ctx) {
-    const ownerId = ownerScopeFilter(ctx.permissions, 'leads', ctx.user.id)
-    if (ownerId) query = query.eq('owner_id', ownerId)
+    const scopedOwner = ownerScopeFilter(ctx.permissions, 'leads', ctx.user.id)
+    if (scopedOwner) query = query.eq('owner_id', scopedOwner)
+    else {
+      const ownerId = pickUuid(filters.ownerId)
+      if (ownerId) query = query.eq('owner_id', ownerId)
+    }
   }
 
   query = page
@@ -180,6 +225,12 @@ export async function searchLeads(
 
   const status = pickFrom(filters.status, LEAD_STATUSES)
   if (status) query = query.eq('status', status)
+
+  const from = pickDate(filters.from)
+  if (from) query = query.gte('created_at', from)
+
+  const to = pickDate(filters.to, true)
+  if (to) query = query.lte('created_at', to)
 
   const term = filters.q ? sanitizeSearch(filters.q) : ''
   if (term) {
@@ -198,11 +249,43 @@ export async function searchLeads(
 // ---------------------------------------------------------------------------
 
 export interface DealFilters {
+  /** Free-text search across the linked contact + product (see below). */
+  q?: string
   paymentStatus?: string
+  /** Manual sales-stage id. */
+  stageId?: string
+  /** Owner filter (applied only for RBAC all-scope callers). */
+  ownerId?: string
   /** Inclusive lower bound on created_at (`YYYY-MM-DD` or ISO). */
   from?: string
   /** Inclusive upper bound on created_at (`YYYY-MM-DD` or ISO). */
   to?: string
+  /** One of {@link DEAL_SORTS}; defaults to `created_desc`. */
+  sort?: string
+}
+
+/**
+ * Valid deal sort keys mapped to their ordered `[column, ascending]` pairs.
+ * Every key ends on `id` as a stable secondary tiebreaker so paging is
+ * deterministic. Unknown keys fall back to `created_desc`.
+ */
+const DEAL_SORTS: Record<string, [column: string, ascending: boolean][]> = {
+  created_desc: [
+    ['created_at', false],
+    ['id', false],
+  ],
+  created_asc: [
+    ['created_at', true],
+    ['id', true],
+  ],
+  total_desc: [
+    ['total_amount', false],
+    ['id', false],
+  ],
+  total_asc: [
+    ['total_amount', true],
+    ['id', true],
+  ],
 }
 
 export type DealListItem = Deal & {
@@ -232,18 +315,63 @@ export async function listDeals(
 ): Promise<DealListItem[]> {
   const supabase = getServiceClient()
 
+  // Free-text deal search has no own text column to match on, so resolve the
+  // linked contacts + products whose name/number matches the term first, then
+  // keep deals pointing at either. Done server-side; a deal with a null contact
+  // still matches on its product (and vice-versa). A present term that matches
+  // nothing short-circuits to an empty result.
+  const term = filters.q ? sanitizeSearch(filters.q) : ''
+  let searchIds: { contactIds: string[]; productIds: string[] } | null = null
+  if (term) {
+    const [{ data: contactRows }, { data: productRows }] = await Promise.all([
+      supabase
+        .from('contacts')
+        .select('id')
+        .or(`name.ilike.%${term}%,whatsapp_number.ilike.%${term}%`)
+        .limit(LIST_LIMIT),
+      supabase
+        .from('products')
+        .select('id')
+        .ilike('name', `%${term}%`)
+        .limit(LIST_LIMIT),
+    ])
+    const contactIds = ((contactRows ?? []) as { id: string }[]).map((r) => r.id)
+    const productIds = ((productRows ?? []) as { id: string }[]).map((r) => r.id)
+    if (contactIds.length === 0 && productIds.length === 0) return []
+    searchIds = { contactIds, productIds }
+  }
+
   let query = supabase
     .from('deals')
     .select(
       '*, product:products (id, name), contact:contacts (id, name, whatsapp_number), stage:stages (id, name)'
     )
-    .order('created_at', { ascending: false })
-    .order('id', { ascending: false })
 
-  // Own-scope roles see only deals they are assigned (owner_id).
+  // Ordering: a validated sort key (default `created_desc`), always ending on
+  // `id` so paging stays deterministic across rows sharing the sort column.
+  const sort = DEAL_SORTS[filters.sort ?? ''] ?? DEAL_SORTS.created_desc
+  for (const [column, ascending] of sort) {
+    query = query.order(column, { ascending })
+  }
+
+  // Own-scope roles see only deals they are assigned (owner_id); all-scope
+  // callers may additionally narrow to a specific owner via the filter.
   if (ctx) {
-    const ownerId = ownerScopeFilter(ctx.permissions, 'deals', ctx.user.id)
-    if (ownerId) query = query.eq('owner_id', ownerId)
+    const scopedOwner = ownerScopeFilter(ctx.permissions, 'deals', ctx.user.id)
+    if (scopedOwner) query = query.eq('owner_id', scopedOwner)
+    else {
+      const ownerId = pickUuid(filters.ownerId)
+      if (ownerId) query = query.eq('owner_id', ownerId)
+    }
+  }
+
+  if (searchIds) {
+    const clauses: string[] = []
+    if (searchIds.contactIds.length > 0)
+      clauses.push(`contact_id.in.(${searchIds.contactIds.join(',')})`)
+    if (searchIds.productIds.length > 0)
+      clauses.push(`product_id.in.(${searchIds.productIds.join(',')})`)
+    query = query.or(clauses.join(','))
   }
 
   query = page
@@ -252,6 +380,9 @@ export async function listDeals(
 
   const paymentStatus = pickFrom(filters.paymentStatus, PAYMENT_STATUSES)
   if (paymentStatus) query = query.eq('payment_status', paymentStatus)
+
+  const stageId = pickUuid(filters.stageId)
+  if (stageId) query = query.eq('stage_id', stageId)
 
   const from = pickDate(filters.from)
   if (from) query = query.gte('created_at', from)
@@ -305,6 +436,140 @@ export async function listContacts(search = ''): Promise<ContactListItem[]> {
     const { deals, ...contact } = row
     return { ...contact, dealCount: deals?.[0]?.count ?? 0 }
   })
+}
+
+export interface ContactFilters {
+  /** Free-text search across name / email / whatsapp number. */
+  q?: string
+  /** Marketing-consent tri-state (`'true'` / `'false'`; anything else = all). */
+  consent?: string
+}
+
+/**
+ * List contacts with an optional name/email/whatsapp search term and a
+ * marketing-consent filter, each row carrying its linked-deal count. Returns at
+ * most {@link LIST_LIMIT} rows, newest first. Server-only; the free-text term is
+ * sanitised before it is interpolated into the PostgREST `or()` expression.
+ */
+export async function listContactsFiltered(
+  filters: ContactFilters = {}
+): Promise<ContactListItem[]> {
+  const supabase = getServiceClient()
+
+  let query = supabase
+    .from('contacts')
+    .select('*, deals:deals (count)')
+    .order('created_at', { ascending: false })
+    .limit(LIST_LIMIT)
+
+  const consent = pickBool(filters.consent)
+  if (consent !== undefined) query = query.eq('marketing_consent', consent)
+
+  const term = filters.q ? sanitizeSearch(filters.q) : ''
+  if (term) {
+    query = query.or(
+      `name.ilike.%${term}%,email.ilike.%${term}%,whatsapp_number.ilike.%${term}%`
+    )
+  }
+
+  const { data, error } = await query
+  if (error) throw new Error(`Failed to list contacts: ${error.message}`)
+
+  type Row = Contact & { deals: { count: number }[] | null }
+  return ((data ?? []) as unknown as Row[]).map((row) => {
+    const { deals, ...contact } = row
+    return { ...contact, dealCount: deals?.[0]?.count ?? 0 }
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Products
+// ---------------------------------------------------------------------------
+
+export interface ProductFilters {
+  /** Free-text search across name / code. */
+  q?: string
+  /** Active tri-state (`'true'` / `'false'`; anything else = all). */
+  active?: string
+}
+
+/**
+ * List products with an optional name/code search term and an active filter.
+ * Returns at most {@link LIST_LIMIT} rows, newest first. Server-only; the
+ * free-text term is sanitised before it is interpolated into the PostgREST
+ * `or()` expression.
+ */
+export async function listProductsFiltered(
+  filters: ProductFilters = {}
+): Promise<Product[]> {
+  const supabase = getServiceClient()
+
+  let query = supabase
+    .from('products')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(LIST_LIMIT)
+
+  const active = pickBool(filters.active)
+  if (active !== undefined) query = query.eq('active', active)
+
+  const term = filters.q ? sanitizeSearch(filters.q) : ''
+  if (term) {
+    query = query.or(`name.ilike.%${term}%,code.ilike.%${term}%`)
+  }
+
+  const { data, error } = await query
+  if (error) throw new Error(`Failed to list products: ${error.message}`)
+  return (data ?? []) as Product[]
+}
+
+// ---------------------------------------------------------------------------
+// Forms
+// ---------------------------------------------------------------------------
+
+/** Valid form statuses (mirrors the `FormStatus` DB check constraint). */
+const FORM_STATUSES = ['draft', 'published'] as const
+
+export interface FormFilters {
+  /** Free-text search across name / slug. */
+  q?: string
+  /** One of {@link FORM_STATUSES}; anything else = all. */
+  status?: string
+  /** Bound-product filter (UUID). */
+  productId?: string
+}
+
+/**
+ * List forms with an optional name/slug search term plus status and bound-product
+ * filters, each row joined with its product name. Returns at most
+ * {@link LIST_LIMIT} rows, newest first. Server-only; the free-text term is
+ * sanitised before it is interpolated into the PostgREST `or()` expression.
+ */
+export async function listFormsFiltered(
+  filters: FormFilters = {}
+): Promise<FormListItem[]> {
+  const supabase = getServiceClient()
+
+  let query = supabase
+    .from('forms')
+    .select('*, product:products (id, name, active)')
+    .order('created_at', { ascending: false })
+    .limit(LIST_LIMIT)
+
+  const status = pickFrom(filters.status, FORM_STATUSES)
+  if (status) query = query.eq('status', status)
+
+  const productId = pickUuid(filters.productId)
+  if (productId) query = query.eq('product_id', productId)
+
+  const term = filters.q ? sanitizeSearch(filters.q) : ''
+  if (term) {
+    query = query.or(`name.ilike.%${term}%,slug.ilike.%${term}%`)
+  }
+
+  const { data, error } = await query
+  if (error) throw new Error(`Failed to list forms: ${error.message}`)
+  return (data ?? []) as unknown as FormListItem[]
 }
 
 // ---------------------------------------------------------------------------

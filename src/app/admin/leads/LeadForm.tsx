@@ -64,7 +64,7 @@ export default function LeadForm(props: Props) {
   const [phone, setPhone] = useState(props.lead?.phone ?? '')
   const [state, setState] = useState(props.lead?.state ?? '')
   const [source, setSource] = useState(props.lead?.source ?? '')
-  const [status, setStatus] = useState(props.lead?.status ?? 'new')
+  const [status, setStatus] = useState(props.lead?.status ?? 'Not Contacted')
   const [productId, setProductId] = useState(props.lead?.product_id ?? '')
   const [customFields, setCustomFields] = useState<CustomFieldValues>(
     props.lead?.custom_fields ?? {}
