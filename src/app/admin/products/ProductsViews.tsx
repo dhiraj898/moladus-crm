@@ -39,9 +39,12 @@ function formatPrice(amount: number, currency: string | null): string {
 
 export default function ProductsViews({
   products,
+  pagination,
   filterValues,
 }: {
   products: Product[]
+  /** Page footer state for Table/List (total across all pages). */
+  pagination: { total: number; page: number; pageSize: number }
   filterValues: Record<string, string>
 }) {
   const [mode, setMode] = useViewMode('products', MODES)
@@ -141,6 +144,7 @@ export default function ProductsViews({
           href={(p) => `/admin/products/${p.id}`}
           emptyTitle="No products found"
           emptyHint="Adjust the filters or create your first product."
+          pagination={pagination}
         />
       ) : (
         <ListView
@@ -149,6 +153,7 @@ export default function ProductsViews({
           rowKey={(p) => p.id}
           emptyTitle="No products found"
           emptyHint="Adjust the filters or create your first product."
+          pagination={pagination}
         />
       )}
     </div>

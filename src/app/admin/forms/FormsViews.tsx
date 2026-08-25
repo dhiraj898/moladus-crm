@@ -45,11 +45,14 @@ function StatusChip({ status }: { status: string }) {
 
 export default function FormsViews({
   forms,
+  pagination,
   products,
   appUrl,
   filterValues,
 }: {
   forms: FormListItem[]
+  /** Page footer state for Table/List (total across all pages). */
+  pagination: { total: number; page: number; pageSize: number }
   products: { id: string; name: string }[]
   appUrl: string
   filterValues: Record<string, string>
@@ -155,6 +158,7 @@ export default function FormsViews({
           href={(f) => `/admin/forms/${f.id}`}
           emptyTitle="No forms found"
           emptyHint="Adjust the filters or create your first enrollment form."
+          pagination={pagination}
         />
       ) : (
         <ListView
@@ -163,6 +167,7 @@ export default function FormsViews({
           rowKey={(f) => f.id}
           emptyTitle="No forms found"
           emptyHint="Adjust the filters or create your first enrollment form."
+          pagination={pagination}
         />
       )}
     </div>

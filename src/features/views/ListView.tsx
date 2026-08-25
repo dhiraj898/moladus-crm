@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import type { CardDef, Tone } from './types'
+import Pagination from './Pagination'
 
 /**
  * Generic roomy card/rows view driven by a `card` config (design §"ListView —
@@ -31,23 +32,30 @@ export default function ListView<T>({
   rowKey,
   emptyTitle = 'Nothing here yet',
   emptyHint = 'Adjust the filters or check back later.',
+  pagination,
 }: {
   card: CardDef<T>
   rows: T[]
   rowKey: (row: T) => string
   emptyTitle?: string
   emptyHint?: string
+  /** When supplied, a page-number footer is rendered below the list. */
+  pagination?: { total: number; page: number; pageSize: number }
 }) {
   if (rows.length === 0) {
     return (
-      <div className="rounded-[12px] border border-line bg-surface px-6 py-16 text-center">
-        <p className="text-sm font-medium text-text">{emptyTitle}</p>
-        <p className="mt-1 text-sm text-dim">{emptyHint}</p>
-      </div>
+      <>
+        <div className="rounded-[12px] border border-line bg-surface px-6 py-16 text-center">
+          <p className="text-sm font-medium text-text">{emptyTitle}</p>
+          <p className="mt-1 text-sm text-dim">{emptyHint}</p>
+        </div>
+        {pagination ? <Pagination {...pagination} /> : null}
+      </>
     )
   }
 
   return (
+    <>
     <div className="flex flex-col gap-2">
       {rows.map((row) => {
         const meta = card.meta?.(row) ?? []
@@ -86,5 +94,7 @@ export default function ListView<T>({
         )
       })}
     </div>
+    {pagination ? <Pagination {...pagination} /> : null}
+    </>
   )
 }

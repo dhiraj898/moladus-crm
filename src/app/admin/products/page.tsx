@@ -1,5 +1,7 @@
 import Link from 'next/link'
-import { listProductsFiltered, type ProductFilters } from '@/features/records/queries'
+import { listProductsPaged, type ProductFilters } from '@/features/records/queries'
+import { clampPageSize } from '@/features/views/paginationMath'
+import { fetchPagedClamped } from '@/features/views/fetchPagedClamped'
 import ProductsViews from './ProductsViews'
 
 /**
@@ -27,7 +29,16 @@ export default async function ProductsPage({
     active: first(sp.active),
   }
 
-  const products = await listProductsFiltered(filters)
+  // Table/List pagination — URL is the source of truth (default 25/page); an
+  // out-of-range `?page` is corrected to the last page by `fetchPagedClamped`.
+  const pageSize = clampPageSize(first(sp.pageSize))
+  const {
+    rows: products,
+    total,
+    page,
+  } = await fetchPagedClamped(first(sp.page), pageSize, (window) =>
+    listProductsPaged(filters, window)
+  )
 
   const filterValues: Record<string, string> = {
     q: filters.q ?? '',
@@ -53,7 +64,11 @@ export default async function ProductsPage({
         </Link>
       </div>
 
-      <ProductsViews products={products} filterValues={filterValues} />
+      <ProductsViews
+        products={products}
+        pagination={{ total, page, pageSize }}
+        filterValues={filterValues}
+      />
     </div>
   )
 }

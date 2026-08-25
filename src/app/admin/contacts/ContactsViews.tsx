@@ -28,9 +28,12 @@ function formatDate(iso: string | null): string {
 
 export default function ContactsViews({
   contacts,
+  pagination,
   filterValues,
 }: {
   contacts: ContactListItem[]
+  /** Page footer state for Table/List (total across all pages). */
+  pagination: { total: number; page: number; pageSize: number }
   filterValues: Record<string, string>
 }) {
   const [mode, setMode] = useViewMode('contacts', MODES)
@@ -125,6 +128,7 @@ export default function ContactsViews({
           href={(c) => `/admin/contacts/${c.id}`}
           emptyTitle="No contacts found"
           emptyHint="Adjust the filters or wait for new submissions to arrive."
+          pagination={pagination}
         />
       ) : (
         <ListView
@@ -133,6 +137,7 @@ export default function ContactsViews({
           rowKey={(c) => c.id}
           emptyTitle="No contacts found"
           emptyHint="Adjust the filters or wait for new submissions to arrive."
+          pagination={pagination}
         />
       )}
     </div>
