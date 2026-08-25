@@ -14,10 +14,10 @@ import type {
   GroupColumn,
   ViewMode,
 } from '@/features/views/types'
-import { changeDealStage } from '@/features/crm/deals/actions'
+import { changeDealStage, loadDealColumnRows } from '@/features/crm/deals/actions'
 import { formatMoney } from '@/features/form-engine/estimate'
 import PaymentStatusChip from '@/features/records/PaymentStatusChip'
-import type { DealListItem } from '@/features/records/queries'
+import type { DealFilters, DealListItem } from '@/features/records/queries'
 import type { PaymentStatus } from '@/lib/supabase/types'
 
 /**
@@ -67,12 +67,22 @@ function formatDate(iso: string | null): string {
 }
 
 export default function DealsViews({
-  deals,
+  boardRows,
+  boardTotals,
+  pagedDeals,
+  pagination,
   stages,
   owners,
   filterValues,
 }: {
-  deals: DealListItem[]
+  /** Kanban first page per stage id (+ `__unassigned`), drag-to-move + paged. */
+  boardRows: Record<string, DealListItem[]>
+  /** Total deals per stage id (+ `__unassigned`) for the Kanban "N of TOTAL". */
+  boardTotals: Record<string, number>
+  /** The current Table/List page window (RBAC-scoped, filtered, paged). */
+  pagedDeals: DealListItem[]
+  /** Page footer state for Table/List (total across all pages). */
+  pagination: { total: number; page: number; pageSize: number }
   stages: { id: string; name: string }[]
   /** Owner options; empty for own-scope callers (no owner filter shown). */
   owners: { id: string; label: string }[]
@@ -182,28 +192,40 @@ export default function DealsViews({
       {mode === 'kanban' ? (
         <KanbanBoard
           columns={groupColumns}
-          cards={deals}
+          initialRows={boardRows}
+          totals={boardTotals}
           card={card}
           getCardId={(d) => d.id}
-          getColumnId={(d) => d.stage_id}
           onMove={(cardId, toColumnId) => changeDealStage(cardId, toColumnId)}
+          onLoadMore={async (columnId, offset) => {
+            const res = await loadDealColumnRows({
+              columnId,
+              offset,
+              filters: filterValues as DealFilters,
+            })
+            return res.ok
+              ? { ok: true, rows: res.data.rows, total: res.data.total }
+              : { ok: false, error: res.error }
+          }}
         />
       ) : mode === 'table' ? (
         <TableView
           columns={columns}
-          rows={deals}
+          rows={pagedDeals}
           rowKey={(d) => d.id}
           href={(d) => `/admin/deals/${d.id}`}
           emptyTitle="No deals found"
           emptyHint="Adjust the filters or wait for new enrollments to convert."
+          pagination={pagination}
         />
       ) : (
         <ListView
           card={card}
-          rows={deals}
+          rows={pagedDeals}
           rowKey={(d) => d.id}
           emptyTitle="No deals found"
           emptyHint="Adjust the filters or wait for new enrollments to convert."
+          pagination={pagination}
         />
       )}
     </div>

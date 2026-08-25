@@ -15,6 +15,12 @@ import {
   validateCustomFields,
   toFieldErrors,
 } from '@/features/crm/custom-fields/validate'
+import {
+  loadColumnRows,
+  type DealFilters,
+  type DealListItem,
+} from '@/features/records/queries'
+import { columnWindow } from '@/features/views/kanbanPaging'
 import type { Contact, Product } from '@/lib/supabase/types'
 import {
   createDealSchema,
@@ -162,6 +168,40 @@ export async function changeDealStage(
 
   revalidatePath(`/admin/deals/${dealId}`)
   return { ok: true, data: undefined }
+}
+
+// ---------------------------------------------------------------------------
+// Kanban "Load more" (per-column paging) — plan Task 3.2
+// ---------------------------------------------------------------------------
+
+/**
+ * Fetch the next window of deals for one Kanban column (a stage), for the
+ * board's "Load more" button. View-gated by `deals.view`; the RBAC own-vs-all
+ * scope + every active filter are re-derived server-side inside
+ * {@link loadColumnRows}, so the client cannot widen its scope through the
+ * `columnId`/`offset` params (they only choose which already-visible column and
+ * window to read). The offset is clamped to a safe window by {@link
+ * columnWindow}. Returns the window's `rows` plus the column's fresh `total`.
+ */
+export async function loadDealColumnRows(input: {
+  columnId: string
+  offset: number
+  filters?: DealFilters
+}): Promise<ActionResult<{ rows: DealListItem[]; total: number }>> {
+  const gate = await requirePermission('deals', 'view')
+  if (!gate.ok) return { ok: false, error: gate.error }
+  const { ctx } = gate
+
+  const window = columnWindow(input.offset)
+  const { rows, total } = await loadColumnRows({
+    entity: 'deals',
+    columnId: input.columnId,
+    offset: window.offset,
+    limit: window.limit,
+    filters: input.filters ?? {},
+    ctx,
+  })
+  return { ok: true, data: { rows, total } }
 }
 
 // ---------------------------------------------------------------------------

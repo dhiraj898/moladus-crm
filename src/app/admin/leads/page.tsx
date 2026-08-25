@@ -1,10 +1,21 @@
 import Link from 'next/link'
-import { searchLeads, type LeadFilters } from '@/features/records/queries'
+import {
+  searchLeadsPaged,
+  leadStatusCounts,
+  loadColumnRows,
+  type LeadFilters,
+  type LeadListItem,
+} from '@/features/records/queries'
+import { LEAD_STATUSES } from '@/features/crm/leads/schema'
 import { listProducts } from '@/features/products/actions'
 import { listForms } from '@/features/forms/queries'
 import { listAssignableUsers } from '@/features/rbac/queries'
 import { requireModuleView } from '@/features/rbac/guard'
 import { scopeFor } from '@/features/rbac/can'
+import { clampPageSize } from '@/features/views/paginationMath'
+import { fetchPagedClamped } from '@/features/views/fetchPagedClamped'
+import { KANBAN_COLUMN_LIMIT } from '@/features/views/kanbanPaging'
+import { UNASSIGNED } from '@/features/views/group'
 import LeadsViews from './LeadsViews'
 
 /**
@@ -43,12 +54,49 @@ export default async function LeadsPage({
 
   const allScope = scopeFor(ctx.permissions, 'leads') === 'all'
 
-  const [leads, products, forms, owners] = await Promise.all([
-    searchLeads(filters, undefined, ctx),
+  // Table/List pagination — URL is the source of truth. `pageSize` clamped to
+  // the allowed set (default 25); `page` clamped to `[1, pageCount]` once total
+  // is known (an out-of-range `?page` is corrected to the last page by
+  // `fetchPagedClamped` so it never renders an empty table).
+  const pageSize = clampPageSize(first(sp.pageSize))
+
+  // Kanban paging (WS3): grouped per-status counts + the first page (≤50) of each
+  // status column, all under the same RBAC scope + filters. `statusCounts` drives
+  // the board's "N of TOTAL" (canonical statuses + an `__unassigned` key); each
+  // column's first page is fetched via `loadColumnRows`, the same server path the
+  // "Load more" action re-enters.
+  const [pagedLeads, products, forms, owners, statusCounts] = await Promise.all([
+    fetchPagedClamped(first(sp.page), pageSize, (window) =>
+      searchLeadsPaged(filters, window, ctx)
+    ),
     listProducts(),
     listForms(),
     allScope ? listAssignableUsers() : Promise.resolve([]),
+    leadStatusCounts(filters, ctx),
   ])
+
+  const page = pagedLeads.page
+
+  // First page per column: every canonical status, plus the Unassigned lane only
+  // when it holds rows (matching the board's "appears when non-empty" behavior).
+  const boardColumnIds = [
+    ...LEAD_STATUSES,
+    ...((statusCounts[UNASSIGNED] ?? 0) > 0 ? [UNASSIGNED] : []),
+  ]
+  const boardRows: Record<string, LeadListItem[]> = {}
+  await Promise.all(
+    boardColumnIds.map(async (columnId) => {
+      const { rows } = await loadColumnRows({
+        entity: 'leads',
+        columnId,
+        offset: 0,
+        limit: KANBAN_COLUMN_LIMIT,
+        filters,
+        ctx,
+      })
+      boardRows[columnId] = rows
+    })
+  )
 
   // Seed the FilterBar controls from the current URL params (design: filters
   // live in the URL so a view switch preserves them and links are shareable).
@@ -95,7 +143,10 @@ export default async function LeadsPage({
       </div>
 
       <LeadsViews
-        leads={leads}
+        boardRows={boardRows}
+        boardTotals={statusCounts}
+        pagedLeads={pagedLeads.rows}
+        pagination={{ total: pagedLeads.total, page, pageSize }}
         products={products.map((p) => ({ id: p.id, name: p.name }))}
         forms={forms.map((f) => ({ id: f.id, name: f.name }))}
         owners={owners.map((u) => ({ id: u.id, label: u.email ?? u.id }))}

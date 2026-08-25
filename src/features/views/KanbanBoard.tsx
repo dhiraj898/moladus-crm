@@ -19,12 +19,17 @@ import type { CardDef, GroupColumn, Tone } from './types'
 import { UNASSIGNED } from './group'
 
 /**
- * Generic Kanban board (design §"KanbanBoard"; plan Task 2.3). Renders one
- * droppable column per declared `groupBy` option plus a read-only "Unassigned"
- * column for cards whose grouping value is null/unknown. Cards are drawn from
- * the shared {@link CardDef}. Dragging a card to another column is optimistic:
- * the card moves in local state immediately, then `onMove(cardId, toColumnId)`
- * runs; on failure the move is rolled back and an inline error is shown.
+ * Generic Kanban board (design §"KanbanBoard"; plan Task 2.3 + Task 3.2 paging).
+ * Renders one droppable column per declared `groupBy` option plus a read-only
+ * "Unassigned" column for cards whose grouping value is null/unknown. Each column
+ * is paged: the page supplies the first {@link KANBAN_COLUMN_LIMIT} rows per
+ * column in `initialRows` and the full per-column `totals`; a per-column footer
+ * shows "N of TOTAL" and a **Load more** button (when N < total) that calls
+ * `onLoadMore(columnId, offset)` and appends the returned rows. Cards are drawn
+ * from the shared {@link CardDef}. Dragging a card to another column is
+ * optimistic: the card moves between the local per-column sets immediately (and
+ * the two totals are adjusted), then `onMove(cardId, toColumnId)` runs; on
+ * failure the move is rolled back and an inline error is shown.
  *
  * Accessibility: a dedicated drag handle carries the pointer + keyboard drag
  * listeners (so the card title stays a normal link), and both a `PointerSensor`
@@ -34,6 +39,14 @@ import { UNASSIGNED } from './group'
  * Design tokens throughout: columns = `--surface`, cards = `--surface2`, count
  * badges as chips, `--accent` on the active drop target.
  */
+
+/** Result of a "Load more" fetch — the appended `rows` + optional fresh `total`. */
+export interface LoadMoreResult<T> {
+  ok: boolean
+  rows?: T[]
+  total?: number
+  error?: string
+}
 
 /** Map a meta chip tone to its design-token classes (dark-default, CSS vars). */
 function chipClass(tone: Tone | undefined): string {
@@ -154,19 +167,29 @@ function DraggableCard<T>({
 function Column<T>({
   column,
   rows,
+  total,
   card,
   getCardId,
   droppable,
   disabled,
+  loading,
+  onLoadMore,
 }: {
   column: GroupColumn
   rows: T[]
+  /** Total rows in this column across all pages (drives the footer + badge). */
+  total: number
   card: CardDef<T>
   getCardId: (row: T) => string
   droppable: boolean
   disabled: boolean
+  /** This column's "Load more" fetch is in flight. */
+  loading: boolean
+  /** Fetch + append this column's next page; absent when nothing can be paged. */
+  onLoadMore?: () => void
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: column.id, disabled: !droppable })
+  const canLoadMore = !!onLoadMore && rows.length < total
 
   return (
     <div className="flex w-72 shrink-0 flex-col rounded-[12px] border border-line bg-surface">
@@ -175,7 +198,7 @@ function Column<T>({
           {column.label}
         </span>
         <span className="inline-flex min-w-[1.5rem] items-center justify-center rounded-full bg-chip-bg px-2 py-0.5 text-xs font-medium text-dim">
-          {rows.length}
+          {total}
         </span>
       </div>
       <div
@@ -198,64 +221,89 @@ function Column<T>({
           ))
         )}
       </div>
+      {total > 0 ? (
+        <div className="flex items-center justify-between gap-2 border-t border-line px-3 py-2 text-xs text-dim">
+          <span>
+            <span className="font-medium text-text">{rows.length}</span> of{' '}
+            {total}
+          </span>
+          {canLoadMore ? (
+            <button
+              type="button"
+              onClick={onLoadMore}
+              disabled={loading}
+              aria-label={`Load more ${column.label}`}
+              className="rounded-[8px] border border-line bg-surface2 px-2.5 py-1 text-xs font-medium text-text transition-colors hover:bg-chip-bg disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {loading ? 'Loading…' : 'Load more'}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   )
 }
 
 export default function KanbanBoard<T>({
   columns,
-  cards,
+  initialRows,
+  totals,
   card,
   getCardId,
-  getColumnId,
   onMove,
+  onLoadMore,
 }: {
   columns: GroupColumn[]
-  cards: T[]
+  /** First page of rows per column id (+ an {@link UNASSIGNED} key when present). */
+  initialRows: Record<string, T[]>
+  /** Total rows per column id across all pages — drives "N of TOTAL". */
+  totals: Record<string, number>
   card: CardDef<T>
   getCardId: (row: T) => string
-  getColumnId: (row: T) => string | null
   onMove: (
     cardId: string,
     toColumnId: string
   ) => Promise<{ ok: boolean; error?: string }>
+  /** Fetch a column's next page for "Load more"; omit to disable paging. */
+  onLoadMore?: (columnId: string, offset: number) => Promise<LoadMoreResult<T>>
 }) {
-  // Optimistic column overrides keyed by card id, layered over `getColumnId`.
-  const [moved, setMoved] = useState<Record<string, string>>({})
+  // Per-column loaded rows (paged), seeded from the server's first page. Cloned
+  // so drag-move / load-more never mutate the props.
+  const [rowsByCol, setRowsByCol] = useState<Record<string, T[]>>(() => {
+    const init: Record<string, T[]> = {}
+    for (const col of columns) init[col.id] = [...(initialRows[col.id] ?? [])]
+    if (initialRows[UNASSIGNED]) init[UNASSIGNED] = [...initialRows[UNASSIGNED]]
+    return init
+  })
+  // Per-column totals, adjusted optimistically on a cross-column move.
+  const [totalsByCol, setTotalsByCol] = useState<Record<string, number>>(() => ({
+    ...totals,
+  }))
   const [error, setError] = useState<string | null>(null)
   const [activeId, setActiveId] = useState<UniqueIdentifier | null>(null)
   const [pending, setPending] = useState(false)
+  const [loadingCol, setLoadingCol] = useState<string | null>(null)
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor)
   )
 
-  const byId = useMemo(() => {
-    const m = new Map<string, T>()
-    for (const row of cards) m.set(getCardId(row), row)
-    return m
-  }, [cards, getCardId])
-
-  const resolveCol = (row: T): string => {
-    const id = getCardId(row)
-    if (moved[id]) return moved[id]
-    return getColumnId(row) ?? UNASSIGNED
-  }
-
-  // Bucket cards by their (optimistic) column; every declared column present.
-  const buckets = useMemo(() => {
-    const out: Record<string, T[]> = {}
-    for (const col of columns) out[col.id] = []
-    for (const row of cards) {
-      const col = resolveCol(row)
-      ;(out[col] ??= []).push(row)
+  // Flat id→row lookup + id→column lookup across every loaded column.
+  const { byId, colOf } = useMemo(() => {
+    const byId = new Map<string, T>()
+    const colOf = new Map<string, string>()
+    for (const [colId, rows] of Object.entries(rowsByCol)) {
+      for (const row of rows) {
+        const id = getCardId(row)
+        byId.set(id, row)
+        colOf.set(id, colId)
+      }
     }
-    return out
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cards, columns, moved])
+    return { byId, colOf }
+  }, [rowsByCol, getCardId])
 
-  const unassigned = buckets[UNASSIGNED] ?? []
+  const hasUnassigned = (rowsByCol[UNASSIGNED]?.length ?? 0) > 0
 
   const activeRow = activeId ? byId.get(String(activeId)) : undefined
 
@@ -273,25 +321,67 @@ export default function KanbanBoard<T>({
     const row = byId.get(cardId)
     if (!row) return
 
-    const fromCol = resolveCol(row)
-    if (toCol === fromCol) return
+    const fromCol = colOf.get(cardId)
+    if (!fromCol || toCol === fromCol) return
 
-    // Optimistic move.
+    // Snapshot for rollback, then apply the optimistic move: pull the card from
+    // its source column, prepend it to the target, and shift both totals.
+    const prevRows = rowsByCol
+    const prevTotals = totalsByCol
     setError(null)
-    setMoved((m) => ({ ...m, [cardId]: toCol }))
+    setRowsByCol((prev) => ({
+      ...prev,
+      [fromCol]: (prev[fromCol] ?? []).filter((r) => getCardId(r) !== cardId),
+      [toCol]: [row, ...(prev[toCol] ?? [])],
+    }))
+    setTotalsByCol((prev) => ({
+      ...prev,
+      [fromCol]: Math.max(0, (prev[fromCol] ?? 1) - 1),
+      [toCol]: (prev[toCol] ?? 0) + 1,
+    }))
     setPending(true)
     try {
       const res = await onMove(cardId, toCol)
       if (!res.ok) {
-        // Roll back to the pre-move column.
-        setMoved((m) => ({ ...m, [cardId]: fromCol }))
+        setRowsByCol(prevRows)
+        setTotalsByCol(prevTotals)
         setError(res.error ?? 'Could not move the card. Please try again.')
       }
     } catch {
-      setMoved((m) => ({ ...m, [cardId]: fromCol }))
+      setRowsByCol(prevRows)
+      setTotalsByCol(prevTotals)
       setError('Could not move the card. Please try again.')
     } finally {
       setPending(false)
+    }
+  }
+
+  async function handleLoadMore(columnId: string) {
+    if (!onLoadMore || loadingCol) return
+    setError(null)
+    setLoadingCol(columnId)
+    const offset = rowsByCol[columnId]?.length ?? 0
+    try {
+      const res = await onLoadMore(columnId, offset)
+      if (res.ok && res.rows) {
+        const appended = res.rows
+        setRowsByCol((prev) => {
+          const existing = prev[columnId] ?? []
+          const seen = new Set(existing.map((r) => getCardId(r)))
+          const next = appended.filter((r) => !seen.has(getCardId(r)))
+          return { ...prev, [columnId]: [...existing, ...next] }
+        })
+        if (typeof res.total === 'number') {
+          const nextTotal = res.total
+          setTotalsByCol((prev) => ({ ...prev, [columnId]: nextTotal }))
+        }
+      } else if (!res.ok) {
+        setError(res.error ?? 'Could not load more cards. Please try again.')
+      }
+    } catch {
+      setError('Could not load more cards. Please try again.')
+    } finally {
+      setLoadingCol(null)
     }
   }
 
@@ -312,25 +402,33 @@ export default function KanbanBoard<T>({
         onDragCancel={() => setActiveId(null)}
       >
         <div className="flex gap-4 overflow-x-auto pb-2">
-          {unassigned.length > 0 ? (
+          {hasUnassigned ? (
             <Column
               column={{ id: UNASSIGNED, label: 'Unassigned', tone: 'dim' }}
-              rows={unassigned}
+              rows={rowsByCol[UNASSIGNED] ?? []}
+              total={totalsByCol[UNASSIGNED] ?? rowsByCol[UNASSIGNED]?.length ?? 0}
               card={card}
               getCardId={getCardId}
               droppable={false}
               disabled={pending}
+              loading={loadingCol === UNASSIGNED}
+              onLoadMore={
+                onLoadMore ? () => handleLoadMore(UNASSIGNED) : undefined
+              }
             />
           ) : null}
           {columns.map((col) => (
             <Column
               key={col.id}
               column={col}
-              rows={buckets[col.id] ?? []}
+              rows={rowsByCol[col.id] ?? []}
+              total={totalsByCol[col.id] ?? rowsByCol[col.id]?.length ?? 0}
               card={card}
               getCardId={getCardId}
               droppable
               disabled={pending}
+              loading={loadingCol === col.id}
+              onLoadMore={onLoadMore ? () => handleLoadMore(col.id) : undefined}
             />
           ))}
         </div>

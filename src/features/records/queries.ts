@@ -1,6 +1,8 @@
 import 'server-only'
 import { getServiceClient } from '@/lib/supabase/server'
 import { LEAD_STATUSES } from '@/features/crm/leads/schema'
+import { listStages } from '@/features/crm/stages/queries'
+import { UNASSIGNED } from '@/features/views/group'
 import type { FormListItem } from '@/features/forms/queries'
 import { ownerScopeFilter } from '@/features/rbac/can'
 import type { CurrentUserWithRole } from '@/features/rbac/permissions'
@@ -43,6 +45,16 @@ const LIST_LIMIT = 500
 export interface QueryPage {
   offset: number
   limit: number
+}
+
+/**
+ * The result of a paged list query: the requested window of `rows` plus the
+ * `total` count of *all* rows matching the same RBAC scope + filters (via
+ * Supabase `{ count: 'exact' }`). The UI derives "Page X of Y" from `total`.
+ */
+export interface PagedResult<T> {
+  rows: T[]
+  total: number
 }
 
 // ---------------------------------------------------------------------------
@@ -171,29 +183,29 @@ export type LeadListItem = Lead & {
   form: { id: string; name: string } | null
 }
 
+const LEAD_SELECT = '*, product:products (id, name), form:forms (id, name)'
+
 /**
- * Search leads with optional name/phone/email + product/form/status filters.
- *
- * Without `page`, returns at most {@link LIST_LIMIT} rows for the list screen.
- * With `page`, returns the explicit `[offset, offset + limit)` window so a
- * caller (the CSV export) can page through the full result set. Ordering is
- * `created_at desc, id desc` — a stable secondary key so paging never skips or
- * repeats rows that share a `created_at`.
- *
- * When `ctx` is supplied and the role's `leads` scope is `own`, results are
- * filtered to the caller's own records (`owner_id`), so own-scope agents — and
- * the CSV export run on their behalf — see only leads assigned to them.
+ * Build the leads query with ordering + RBAC scope + every declared filter
+ * applied, but WITHOUT the row window (`.range`/`.limit`). Shared by
+ * {@link searchLeads} (array) and {@link searchLeadsPaged} ({rows,total}) so the
+ * scope + filter logic lives in exactly one place — a page/offset param can
+ * never widen the RBAC scope because the scope is re-derived here every call.
+ * When `withCount` is set, the count of the full matching set is requested; with
+ * `head` also set no rows are returned (a count-only probe, used by the grouped
+ * Kanban counts).
  */
-export async function searchLeads(
-  filters: LeadFilters = {},
-  page?: QueryPage,
-  ctx?: CurrentUserWithRole
-): Promise<LeadListItem[]> {
+function buildLeadsQuery(
+  filters: LeadFilters,
+  ctx: CurrentUserWithRole | undefined,
+  withCount: boolean,
+  head = false
+) {
   const supabase = getServiceClient()
 
   let query = supabase
     .from('leads')
-    .select('*, product:products (id, name), form:forms (id, name)')
+    .select(LEAD_SELECT, withCount ? { count: 'exact', head } : undefined)
 
   // Ordering: a validated sort key (default `created_desc`), always ending on
   // `id` so paging stays deterministic across rows sharing the sort column.
@@ -212,10 +224,6 @@ export async function searchLeads(
       if (ownerId) query = query.eq('owner_id', ownerId)
     }
   }
-
-  query = page
-    ? query.range(page.offset, page.offset + page.limit - 1)
-    : query.limit(LIST_LIMIT)
 
   const productId = pickUuid(filters.productId)
   if (productId) query = query.eq('product_id', productId)
@@ -239,9 +247,57 @@ export async function searchLeads(
     )
   }
 
+  return query
+}
+
+/**
+ * Search leads with optional name/phone/email + product/form/status filters.
+ *
+ * Without `page`, returns at most {@link LIST_LIMIT} rows for the list screen.
+ * With `page`, returns the explicit `[offset, offset + limit)` window so a
+ * caller (the CSV export) can page through the full result set. Ordering is
+ * `created_at desc, id desc` — a stable secondary key so paging never skips or
+ * repeats rows that share a `created_at`.
+ *
+ * When `ctx` is supplied and the role's `leads` scope is `own`, results are
+ * filtered to the caller's own records (`owner_id`), so own-scope agents — and
+ * the CSV export run on their behalf — see only leads assigned to them.
+ */
+export async function searchLeads(
+  filters: LeadFilters = {},
+  page?: QueryPage,
+  ctx?: CurrentUserWithRole
+): Promise<LeadListItem[]> {
+  const base = buildLeadsQuery(filters, ctx, false)
+  const query = page
+    ? base.range(page.offset, page.offset + page.limit - 1)
+    : base.limit(LIST_LIMIT)
+
   const { data, error } = await query
   if (error) throw new Error(`Failed to search leads: ${error.message}`)
   return (data ?? []) as unknown as LeadListItem[]
+}
+
+/**
+ * Paged variant of {@link searchLeads} — returns the requested window plus the
+ * `total` count of all leads matching the same RBAC scope + filters (via
+ * `{ count: 'exact' }`). Drives the Table/List pagination control. The scope +
+ * filters are re-derived server-side in {@link buildLeadsQuery}, so a client
+ * cannot widen its scope through the `page` window.
+ */
+export async function searchLeadsPaged(
+  filters: LeadFilters,
+  page: QueryPage,
+  ctx?: CurrentUserWithRole
+): Promise<PagedResult<LeadListItem>> {
+  const query = buildLeadsQuery(filters, ctx, true).range(
+    page.offset,
+    page.offset + page.limit - 1
+  )
+
+  const { data, error, count } = await query
+  if (error) throw new Error(`Failed to search leads: ${error.message}`)
+  return { rows: (data ?? []) as unknown as LeadListItem[], total: count ?? 0 }
 }
 
 // ---------------------------------------------------------------------------
@@ -295,57 +351,61 @@ export type DealListItem = Deal & {
   stage_name: string | null
 }
 
-/**
- * List deals with optional payment_status + created_at date-range filters.
- *
- * Without `page`, returns at most {@link LIST_LIMIT} rows for the list screen.
- * With `page`, returns the explicit `[offset, offset + limit)` window so a
- * caller (the CSV export) can page through the full result set. Ordering is
- * `created_at desc, id desc` — a stable secondary key so paging never skips or
- * repeats rows that share a `created_at`.
- *
- * When `ctx` is supplied and the role's `deals` scope is `own`, results are
- * filtered to the caller's own records (`owner_id`), so own-scope agents — and
- * the CSV export run on their behalf — see only deals assigned to them.
- */
-export async function listDeals(
-  filters: DealFilters = {},
-  page?: QueryPage,
-  ctx?: CurrentUserWithRole
-): Promise<DealListItem[]> {
-  const supabase = getServiceClient()
+const DEAL_SELECT =
+  '*, product:products (id, name), contact:contacts (id, name, whatsapp_number), stage:stages (id, name)'
 
-  // Free-text deal search has no own text column to match on, so resolve the
-  // linked contacts + products whose name/number matches the term first, then
-  // keep deals pointing at either. Done server-side; a deal with a null contact
-  // still matches on its product (and vice-versa). A present term that matches
-  // nothing short-circuits to an empty result.
-  const term = filters.q ? sanitizeSearch(filters.q) : ''
-  let searchIds: { contactIds: string[]; productIds: string[] } | null = null
-  if (term) {
-    const [{ data: contactRows }, { data: productRows }] = await Promise.all([
-      supabase
-        .from('contacts')
-        .select('id')
-        .or(`name.ilike.%${term}%,whatsapp_number.ilike.%${term}%`)
-        .limit(LIST_LIMIT),
-      supabase
-        .from('products')
-        .select('id')
-        .ilike('name', `%${term}%`)
-        .limit(LIST_LIMIT),
-    ])
-    const contactIds = ((contactRows ?? []) as { id: string }[]).map((r) => r.id)
-    const productIds = ((productRows ?? []) as { id: string }[]).map((r) => r.id)
-    if (contactIds.length === 0 && productIds.length === 0) return []
-    searchIds = { contactIds, productIds }
-  }
+/** Resolved contact/product ids a free-text deal search matched, or a sentinel
+ * that no id matched (so the caller short-circuits to an empty result). */
+type DealSearchIds =
+  | { contactIds: string[]; productIds: string[] }
+  | 'no-match'
+  | null
+
+/**
+ * Free-text deal search has no own text column to match on, so resolve the
+ * linked contacts + products whose name/number matches the term first, then the
+ * caller keeps deals pointing at either. A present term that matches nothing
+ * returns `'no-match'` so the caller returns an empty page without a deal query.
+ */
+async function resolveDealSearchIds(term: string): Promise<DealSearchIds> {
+  if (!term) return null
+  const supabase = getServiceClient()
+  const [{ data: contactRows }, { data: productRows }] = await Promise.all([
+    supabase
+      .from('contacts')
+      .select('id')
+      .or(`name.ilike.%${term}%,whatsapp_number.ilike.%${term}%`)
+      .limit(LIST_LIMIT),
+    supabase
+      .from('products')
+      .select('id')
+      .ilike('name', `%${term}%`)
+      .limit(LIST_LIMIT),
+  ])
+  const contactIds = ((contactRows ?? []) as { id: string }[]).map((r) => r.id)
+  const productIds = ((productRows ?? []) as { id: string }[]).map((r) => r.id)
+  if (contactIds.length === 0 && productIds.length === 0) return 'no-match'
+  return { contactIds, productIds }
+}
+
+/**
+ * Build the deals query with ordering + RBAC scope + every declared filter
+ * (including the resolved free-text `searchIds`) applied, but WITHOUT the row
+ * window. Shared by {@link listDeals} and {@link listDealsPaged} so scope +
+ * filters live in one place and a page/offset param can never widen scope.
+ */
+function buildDealsQuery(
+  filters: DealFilters,
+  ctx: CurrentUserWithRole | undefined,
+  searchIds: Exclude<DealSearchIds, 'no-match'>,
+  withCount: boolean,
+  head = false
+) {
+  const supabase = getServiceClient()
 
   let query = supabase
     .from('deals')
-    .select(
-      '*, product:products (id, name), contact:contacts (id, name, whatsapp_number), stage:stages (id, name)'
-    )
+    .select(DEAL_SELECT, withCount ? { count: 'exact', head } : undefined)
 
   // Ordering: a validated sort key (default `created_desc`), always ending on
   // `id` so paging stays deterministic across rows sharing the sort column.
@@ -374,10 +434,6 @@ export async function listDeals(
     query = query.or(clauses.join(','))
   }
 
-  query = page
-    ? query.range(page.offset, page.offset + page.limit - 1)
-    : query.limit(LIST_LIMIT)
-
   const paymentStatus = pickFrom(filters.paymentStatus, PAYMENT_STATUSES)
   if (paymentStatus) query = query.eq('payment_status', paymentStatus)
 
@@ -390,16 +446,236 @@ export async function listDeals(
   const to = pickDate(filters.to, true)
   if (to) query = query.lte('created_at', to)
 
-  const { data, error } = await query
-  if (error) throw new Error(`Failed to list deals: ${error.message}`)
+  return query
+}
 
+/** Map a joined deal row (with a nested `stage`) to the flat {@link DealListItem}. */
+function toDealListItem(row: unknown): DealListItem {
   type Row = Omit<DealListItem, 'stage_name'> & {
     stage: { id: string; name: string } | null
   }
-  return ((data ?? []) as unknown as Row[]).map((row) => {
-    const { stage, ...rest } = row
-    return { ...rest, stage_name: stage?.name ?? null }
-  })
+  const { stage, ...rest } = row as Row
+  return { ...rest, stage_name: stage?.name ?? null }
+}
+
+/**
+ * List deals with optional payment_status + created_at date-range filters.
+ *
+ * Without `page`, returns at most {@link LIST_LIMIT} rows for the list screen.
+ * With `page`, returns the explicit `[offset, offset + limit)` window so a
+ * caller (the CSV export) can page through the full result set. Ordering is
+ * `created_at desc, id desc` — a stable secondary key so paging never skips or
+ * repeats rows that share a `created_at`.
+ *
+ * When `ctx` is supplied and the role's `deals` scope is `own`, results are
+ * filtered to the caller's own records (`owner_id`), so own-scope agents — and
+ * the CSV export run on their behalf — see only deals assigned to them.
+ */
+export async function listDeals(
+  filters: DealFilters = {},
+  page?: QueryPage,
+  ctx?: CurrentUserWithRole
+): Promise<DealListItem[]> {
+  const term = filters.q ? sanitizeSearch(filters.q) : ''
+  const searchIds = await resolveDealSearchIds(term)
+  if (searchIds === 'no-match') return []
+
+  const base = buildDealsQuery(filters, ctx, searchIds, false)
+  const query = page
+    ? base.range(page.offset, page.offset + page.limit - 1)
+    : base.limit(LIST_LIMIT)
+
+  const { data, error } = await query
+  if (error) throw new Error(`Failed to list deals: ${error.message}`)
+  return ((data ?? []) as unknown[]).map(toDealListItem)
+}
+
+/**
+ * Paged variant of {@link listDeals} — returns the requested window plus the
+ * `total` count of all deals matching the same RBAC scope + filters (via
+ * `{ count: 'exact' }`). Drives the Table/List pagination control. Scope +
+ * filters are re-derived server-side, so a client cannot widen scope through the
+ * `page` window. A free-text term that matches no contact/product returns an
+ * empty page with `total: 0`.
+ */
+export async function listDealsPaged(
+  filters: DealFilters,
+  page: QueryPage,
+  ctx?: CurrentUserWithRole
+): Promise<PagedResult<DealListItem>> {
+  const term = filters.q ? sanitizeSearch(filters.q) : ''
+  const searchIds = await resolveDealSearchIds(term)
+  if (searchIds === 'no-match') return { rows: [], total: 0 }
+
+  const query = buildDealsQuery(filters, ctx, searchIds, true).range(
+    page.offset,
+    page.offset + page.limit - 1
+  )
+
+  const { data, error, count } = await query
+  if (error) throw new Error(`Failed to list deals: ${error.message}`)
+  return { rows: ((data ?? []) as unknown[]).map(toDealListItem), total: count ?? 0 }
+}
+
+// ---------------------------------------------------------------------------
+// Kanban paging (Deals by stage, Leads by status) — plan Task 3.1
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-column grouped counts for the Deals Kanban board: the number of deals in
+ * each pipeline stage under the same RBAC scope + active filters as the board
+ * itself, plus an {@link UNASSIGNED} key for deals with no stage. Reuses
+ * {@link buildDealsQuery} (a count-only `head` probe per column) so the scope +
+ * filter logic lives in one place — a client cannot widen scope through a column
+ * param. A free-text term matching no contact/product yields all-zero counts.
+ */
+export async function dealStageCounts(
+  filters: DealFilters,
+  ctx?: CurrentUserWithRole
+): Promise<Record<string, number>> {
+  const term = filters.q ? sanitizeSearch(filters.q) : ''
+  const searchIds = await resolveDealSearchIds(term)
+  const stages = await listStages()
+
+  const out: Record<string, number> = {}
+  for (const s of stages) out[s.id] = 0
+  out[UNASSIGNED] = 0
+  if (searchIds === 'no-match') return out
+
+  // `null` = the synthetic Unassigned column (deals with no stage_id).
+  const ids: (string | null)[] = [...stages.map((s) => s.id), null]
+  await Promise.all(
+    ids.map(async (id) => {
+      const base = buildDealsQuery(filters, ctx, searchIds, true, true)
+      const q = id === null ? base.is('stage_id', null) : base.eq('stage_id', id)
+      const { count, error } = await q
+      if (error) throw new Error(`Failed to count deals: ${error.message}`)
+      out[id ?? UNASSIGNED] = count ?? 0
+    })
+  )
+  return out
+}
+
+/**
+ * Per-column grouped counts for the Leads Kanban board: the number of leads in
+ * each canonical {@link LEAD_STATUSES} status under the same RBAC scope + active
+ * filters as the board, plus an {@link UNASSIGNED} key for leads with a null
+ * status. Reuses {@link buildLeadsQuery} (a count-only `head` probe per column)
+ * so scope + filters live in one place.
+ */
+export async function leadStatusCounts(
+  filters: LeadFilters,
+  ctx?: CurrentUserWithRole
+): Promise<Record<string, number>> {
+  const out: Record<string, number> = {}
+  for (const s of LEAD_STATUSES) out[s] = 0
+  out[UNASSIGNED] = 0
+
+  const ids: (string | null)[] = [...LEAD_STATUSES, null]
+  await Promise.all(
+    ids.map(async (id) => {
+      const base = buildLeadsQuery(filters, ctx, true, true)
+      const q = id === null ? base.is('status', null) : base.eq('status', id)
+      const { count, error } = await q
+      if (error) throw new Error(`Failed to count leads: ${error.message}`)
+      out[id ?? UNASSIGNED] = count ?? 0
+    })
+  )
+  return out
+}
+
+/** Discriminated args for {@link loadColumnRows} — a deals column window. */
+interface DealColumnArgs {
+  entity: 'deals'
+  /** Stage id, or {@link UNASSIGNED} for the no-stage column. */
+  columnId: string
+  offset: number
+  limit: number
+  filters: DealFilters
+  ctx?: CurrentUserWithRole
+}
+
+/** Discriminated args for {@link loadColumnRows} — a leads column window. */
+interface LeadColumnArgs {
+  entity: 'leads'
+  /** Lead status, or {@link UNASSIGNED} for the null-status column. */
+  columnId: string
+  offset: number
+  limit: number
+  filters: LeadFilters
+  ctx?: CurrentUserWithRole
+}
+
+export type LoadColumnRowsArgs = DealColumnArgs | LeadColumnArgs
+
+export async function loadColumnRows(
+  args: DealColumnArgs
+): Promise<PagedResult<DealListItem>>
+export async function loadColumnRows(
+  args: LeadColumnArgs
+): Promise<PagedResult<LeadListItem>>
+/**
+ * Fetch one Kanban column's `[offset, offset + limit)` window plus its `total`
+ * count, for the board's initial per-column page and each "Load more" (plan Task
+ * 3.1). Deals are windowed by `stage_id`, leads by `status`; the {@link
+ * UNASSIGNED} sentinel windows the null-dimension column. Ordering is
+ * `created_at desc, id desc` (the builders' default sort), so paging never skips
+ * or repeats a row sharing a `created_at`.
+ *
+ * RBAC scope + every active filter are re-derived server-side in the shared
+ * builders on every call, so a forged `columnId`/`offset` can only re-window a
+ * column the caller may already see — it can never widen the owner scope. An
+ * invalid `columnId` (a non-uuid deal stage, a non-canonical lead status)
+ * returns an empty window rather than erroring.
+ */
+export async function loadColumnRows(
+  args: LoadColumnRowsArgs
+): Promise<PagedResult<DealListItem | LeadListItem>> {
+  const from = Math.max(0, Math.floor(args.offset))
+  const to = from + Math.max(1, Math.floor(args.limit)) - 1
+
+  if (args.entity === 'deals') {
+    const { columnId, filters, ctx } = args
+    // Validate the column before it reaches PostgREST: a non-uuid, non-sentinel
+    // stage id would otherwise fault the `.eq`.
+    if (columnId !== UNASSIGNED && !pickUuid(columnId)) {
+      return { rows: [], total: 0 }
+    }
+    const term = filters.q ? sanitizeSearch(filters.q) : ''
+    const searchIds = await resolveDealSearchIds(term)
+    if (searchIds === 'no-match') return { rows: [], total: 0 }
+
+    const base = buildDealsQuery(filters, ctx, searchIds, true)
+    const scoped =
+      columnId === UNASSIGNED
+        ? base.is('stage_id', null)
+        : base.eq('stage_id', columnId)
+    const { data, error, count } = await scoped.range(from, to)
+    if (error) throw new Error(`Failed to load deals column: ${error.message}`)
+    return {
+      rows: ((data ?? []) as unknown[]).map(toDealListItem),
+      total: count ?? 0,
+    }
+  }
+
+  const { columnId, filters, ctx } = args
+  if (
+    columnId !== UNASSIGNED &&
+    !(LEAD_STATUSES as readonly string[]).includes(columnId)
+  ) {
+    return { rows: [], total: 0 }
+  }
+  const base = buildLeadsQuery(filters, ctx, true)
+  const scoped =
+    columnId === UNASSIGNED
+      ? base.is('status', null)
+      : base.eq('status', columnId)
+  const { data, error, count } = await scoped.range(from, to)
+  if (error) throw new Error(`Failed to load leads column: ${error.message}`)
+  return {
+    rows: (data ?? []) as unknown as LeadListItem[],
+    total: count ?? 0,
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -446,21 +722,18 @@ export interface ContactFilters {
 }
 
 /**
- * List contacts with an optional name/email/whatsapp search term and a
- * marketing-consent filter, each row carrying its linked-deal count. Returns at
- * most {@link LIST_LIMIT} rows, newest first. Server-only; the free-text term is
- * sanitised before it is interpolated into the PostgREST `or()` expression.
+ * Build the contacts query with ordering + consent/search filters applied, but
+ * WITHOUT the row window. Shared by {@link listContactsFiltered} (array) and
+ * {@link listContactsPaged} ({rows,total}). Contacts are not owner-scoped, so
+ * there is no RBAC scope to widen via the page window.
  */
-export async function listContactsFiltered(
-  filters: ContactFilters = {}
-): Promise<ContactListItem[]> {
+function buildContactsQuery(filters: ContactFilters, withCount: boolean) {
   const supabase = getServiceClient()
 
   let query = supabase
     .from('contacts')
-    .select('*, deals:deals (count)')
+    .select('*, deals:deals (count)', withCount ? { count: 'exact' } : undefined)
     .order('created_at', { ascending: false })
-    .limit(LIST_LIMIT)
 
   const consent = pickBool(filters.consent)
   if (consent !== undefined) query = query.eq('marketing_consent', consent)
@@ -472,14 +745,50 @@ export async function listContactsFiltered(
     )
   }
 
-  const { data, error } = await query
-  if (error) throw new Error(`Failed to list contacts: ${error.message}`)
+  return query
+}
 
+/** Map a joined contact row (with a nested deals-count) to {@link ContactListItem}. */
+function toContactListItem(row: unknown): ContactListItem {
   type Row = Contact & { deals: { count: number }[] | null }
-  return ((data ?? []) as unknown as Row[]).map((row) => {
-    const { deals, ...contact } = row
-    return { ...contact, dealCount: deals?.[0]?.count ?? 0 }
-  })
+  const { deals, ...contact } = row as Row
+  return { ...contact, dealCount: deals?.[0]?.count ?? 0 }
+}
+
+/**
+ * List contacts with an optional name/email/whatsapp search term and a
+ * marketing-consent filter, each row carrying its linked-deal count. Returns at
+ * most {@link LIST_LIMIT} rows, newest first. Server-only; the free-text term is
+ * sanitised before it is interpolated into the PostgREST `or()` expression.
+ */
+export async function listContactsFiltered(
+  filters: ContactFilters = {}
+): Promise<ContactListItem[]> {
+  const { data, error } = await buildContactsQuery(filters, false).limit(
+    LIST_LIMIT
+  )
+  if (error) throw new Error(`Failed to list contacts: ${error.message}`)
+  return ((data ?? []) as unknown[]).map(toContactListItem)
+}
+
+/**
+ * Paged variant of {@link listContactsFiltered} — returns the requested window
+ * plus the `total` count of all contacts matching the same filters (via
+ * `{ count: 'exact' }`). Drives the Table/List pagination control.
+ */
+export async function listContactsPaged(
+  filters: ContactFilters,
+  page: QueryPage
+): Promise<PagedResult<ContactListItem>> {
+  const { data, error, count } = await buildContactsQuery(filters, true).range(
+    page.offset,
+    page.offset + page.limit - 1
+  )
+  if (error) throw new Error(`Failed to list contacts: ${error.message}`)
+  return {
+    rows: ((data ?? []) as unknown[]).map(toContactListItem),
+    total: count ?? 0,
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -494,21 +803,17 @@ export interface ProductFilters {
 }
 
 /**
- * List products with an optional name/code search term and an active filter.
- * Returns at most {@link LIST_LIMIT} rows, newest first. Server-only; the
- * free-text term is sanitised before it is interpolated into the PostgREST
- * `or()` expression.
+ * Build the products query with ordering + active/search filters applied, but
+ * WITHOUT the row window. Shared by {@link listProductsFiltered} (array) and
+ * {@link listProductsPaged} ({rows,total}).
  */
-export async function listProductsFiltered(
-  filters: ProductFilters = {}
-): Promise<Product[]> {
+function buildProductsQuery(filters: ProductFilters, withCount: boolean) {
   const supabase = getServiceClient()
 
   let query = supabase
     .from('products')
-    .select('*')
+    .select('*', withCount ? { count: 'exact' } : undefined)
     .order('created_at', { ascending: false })
-    .limit(LIST_LIMIT)
 
   const active = pickBool(filters.active)
   if (active !== undefined) query = query.eq('active', active)
@@ -518,9 +823,40 @@ export async function listProductsFiltered(
     query = query.or(`name.ilike.%${term}%,code.ilike.%${term}%`)
   }
 
-  const { data, error } = await query
+  return query
+}
+
+/**
+ * List products with an optional name/code search term and an active filter.
+ * Returns at most {@link LIST_LIMIT} rows, newest first. Server-only; the
+ * free-text term is sanitised before it is interpolated into the PostgREST
+ * `or()` expression.
+ */
+export async function listProductsFiltered(
+  filters: ProductFilters = {}
+): Promise<Product[]> {
+  const { data, error } = await buildProductsQuery(filters, false).limit(
+    LIST_LIMIT
+  )
   if (error) throw new Error(`Failed to list products: ${error.message}`)
   return (data ?? []) as Product[]
+}
+
+/**
+ * Paged variant of {@link listProductsFiltered} — returns the requested window
+ * plus the `total` count of all products matching the same filters (via
+ * `{ count: 'exact' }`). Drives the Table/List pagination control.
+ */
+export async function listProductsPaged(
+  filters: ProductFilters,
+  page: QueryPage
+): Promise<PagedResult<Product>> {
+  const { data, error, count } = await buildProductsQuery(filters, true).range(
+    page.offset,
+    page.offset + page.limit - 1
+  )
+  if (error) throw new Error(`Failed to list products: ${error.message}`)
+  return { rows: (data ?? []) as Product[], total: count ?? 0 }
 }
 
 // ---------------------------------------------------------------------------
@@ -540,21 +876,20 @@ export interface FormFilters {
 }
 
 /**
- * List forms with an optional name/slug search term plus status and bound-product
- * filters, each row joined with its product name. Returns at most
- * {@link LIST_LIMIT} rows, newest first. Server-only; the free-text term is
- * sanitised before it is interpolated into the PostgREST `or()` expression.
+ * Build the forms query with ordering + status/product/search filters applied,
+ * but WITHOUT the row window. Shared by {@link listFormsFiltered} (array) and
+ * {@link listFormsPaged} ({rows,total}).
  */
-export async function listFormsFiltered(
-  filters: FormFilters = {}
-): Promise<FormListItem[]> {
+function buildFormsQuery(filters: FormFilters, withCount: boolean) {
   const supabase = getServiceClient()
 
   let query = supabase
     .from('forms')
-    .select('*, product:products (id, name, active)')
+    .select(
+      '*, product:products (id, name, active)',
+      withCount ? { count: 'exact' } : undefined
+    )
     .order('created_at', { ascending: false })
-    .limit(LIST_LIMIT)
 
   const status = pickFrom(filters.status, FORM_STATUSES)
   if (status) query = query.eq('status', status)
@@ -567,9 +902,43 @@ export async function listFormsFiltered(
     query = query.or(`name.ilike.%${term}%,slug.ilike.%${term}%`)
   }
 
-  const { data, error } = await query
+  return query
+}
+
+/**
+ * List forms with an optional name/slug search term plus status and bound-product
+ * filters, each row joined with its product name. Returns at most
+ * {@link LIST_LIMIT} rows, newest first. Server-only; the free-text term is
+ * sanitised before it is interpolated into the PostgREST `or()` expression.
+ */
+export async function listFormsFiltered(
+  filters: FormFilters = {}
+): Promise<FormListItem[]> {
+  const { data, error } = await buildFormsQuery(filters, false).limit(
+    LIST_LIMIT
+  )
   if (error) throw new Error(`Failed to list forms: ${error.message}`)
   return (data ?? []) as unknown as FormListItem[]
+}
+
+/**
+ * Paged variant of {@link listFormsFiltered} — returns the requested window plus
+ * the `total` count of all forms matching the same filters (via
+ * `{ count: 'exact' }`). Drives the Table/List pagination control.
+ */
+export async function listFormsPaged(
+  filters: FormFilters,
+  page: QueryPage
+): Promise<PagedResult<FormListItem>> {
+  const { data, error, count } = await buildFormsQuery(filters, true).range(
+    page.offset,
+    page.offset + page.limit - 1
+  )
+  if (error) throw new Error(`Failed to list forms: ${error.message}`)
+  return {
+    rows: (data ?? []) as unknown as FormListItem[],
+    total: count ?? 0,
+  }
 }
 
 // ---------------------------------------------------------------------------
