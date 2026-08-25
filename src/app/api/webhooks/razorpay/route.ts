@@ -3,7 +3,7 @@ import type { PaymentStatus } from '@/lib/supabase/types'
 import { getSecret } from '@/features/integrations/secrets'
 import { getServiceClient } from '@/lib/supabase/server'
 import { verifyRazorpaySignature } from '@/features/razorpay/verify'
-import { sendReceipt } from '@/features/aisensy/send'
+import { moveDealStageAsSystem } from '@/features/crm/automation/moveStage'
 import { logActivity } from '@/features/crm/activities/service'
 import { emitEvent } from '@/features/webhooks/emit'
 
@@ -16,7 +16,8 @@ import { emitEvent } from '@/features/webhooks/emit'
  *  2. Persist the raw event in `webhook_events`, idempotent on the Razorpay
  *     event id. A duplicate that is already processed short-circuits to 200.
  *  3. Update the matching deal by `razorpay_payment_link_id`, and on `paid`
- *     enqueue the receipt WhatsApp (failure logged, never fatal).
+ *     auto-move it to the Enrolled stage as a system actor — whose on-enter
+ *     actions own the enrollment confirmation (best-effort, never fatal).
  *  4. Mark the event processed and return 200.
  *
  * Node runtime is required for `node:crypto` (used by the signature check).
@@ -107,7 +108,7 @@ export async function POST(req: Request): Promise<Response> {
   if (newStatus && paymentLinkId) {
     const { data: deal } = await supabase
       .from('deals')
-      .select('id, contact_id, product_id, total_amount')
+      .select('id, total_amount')
       .eq('razorpay_payment_link_id', paymentLinkId)
       .maybeSingle()
 
@@ -179,19 +180,27 @@ export async function POST(req: Request): Promise<Response> {
         }
       }
 
-      // On a genuine transition to paid, enqueue the receipt WhatsApp. Never
-      // fatal to the webhook.
+      // On a genuine transition to paid, auto-move the deal to the Enrolled
+      // stage as a SYSTEM actor. The Enrolled stage's on-enter actions (fired by
+      // `moveDealStageAsSystem` → `runStageActions`) now own the enrollment
+      // confirmation message, so the webhook no longer sends a hardcoded receipt.
+      // Best-effort: gated on the genuine transition (so a replayed paid webhook
+      // won't re-move), and wrapped in try/catch so a move failure can never
+      // break the 200 ack.
       if (newStatus === 'paid' && transitioned && transitioned.length > 0) {
-        // `deals.total_amount` is a `numeric` column; supabase-js serializes
-        // numeric values as JSON strings to preserve precision, so coerce to a
-        // real number at this boundary before it reaches `.toFixed` downstream.
-        await enqueueReceipt(
-          supabase,
-          deal.id,
-          deal.contact_id,
-          deal.product_id,
-          Number(deal.total_amount),
-        )
+        try {
+          const { data: enrolledStage } = await supabase
+            .from('stages')
+            .select('id')
+            .eq('name', 'Enrolled')
+            .limit(1)
+            .maybeSingle()
+          if (enrolledStage?.id) {
+            await moveDealStageAsSystem(deal.id, enrolledStage.id, { via: 'payment' })
+          }
+        } catch (err) {
+          console.error('razorpay webhook: paid → Enrolled move failed:', err)
+        }
       }
     }
   }
@@ -203,48 +212,4 @@ export async function POST(req: Request): Promise<Response> {
     .eq('event_id', eventId)
 
   return NextResponse.json({ ok: true })
-}
-
-/**
- * Fetch the receipt recipient details and fire the AiSensy receipt.
- * All failures are swallowed — the webhook must still return 200.
- */
-async function enqueueReceipt(
-  supabase: ReturnType<typeof getServiceClient>,
-  dealId: string,
-  contactId: string | null,
-  productId: string | null,
-  totalAmount: number,
-): Promise<void> {
-  try {
-    if (!contactId) return
-
-    const { data: contact } = await supabase
-      .from('contacts')
-      .select('name, whatsapp_number')
-      .eq('id', contactId)
-      .maybeSingle()
-
-    if (!contact?.whatsapp_number) return
-
-    let productName = 'your enrollment'
-    if (productId) {
-      const { data: product } = await supabase
-        .from('products')
-        .select('name')
-        .eq('id', productId)
-        .maybeSingle()
-      if (product?.name) productName = product.name
-    }
-
-    await sendReceipt({
-      dealId,
-      name: contact.name ?? 'there',
-      whatsapp: contact.whatsapp_number,
-      amount: totalAmount,
-      productName,
-    })
-  } catch {
-    // Notification failures must not affect the webhook acknowledgement.
-  }
 }
