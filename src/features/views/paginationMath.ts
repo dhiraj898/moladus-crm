@@ -81,3 +81,21 @@ export function clampPage(
 export function offsetFor(page: number, pageSize: number): number {
   return (page - 1) * pageSize
 }
+
+/**
+ * Coerce a raw `?page` URL param (`string | string[] | undefined`, or a number)
+ * to the 1-based page the caller *asked for*, floored and never below 1. Junk,
+ * `undefined`, `0`, and negatives collapse to 1. Unlike {@link clampPage} this
+ * has no upper bound — the total row count is not yet known at parse time, so
+ * the offset it feeds may overshoot; the fetch layer re-clamps once `total`
+ * comes back (see `fetchPagedClamped`).
+ */
+export function parseRequestedPage(value: unknown): number {
+  const n =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string'
+        ? Number(value)
+        : NaN
+  return Math.max(1, Math.floor(n) || 1)
+}

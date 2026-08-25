@@ -6,6 +6,7 @@ import {
   pageCount,
   clampPage,
   offsetFor,
+  parseRequestedPage,
 } from './paginationMath'
 
 /**
@@ -95,6 +96,29 @@ describe('clampPage', () => {
 
   it('floors fractional page values', () => {
     expect(clampPage(2.9, 100, 25)).toBe(2)
+  })
+})
+
+describe('parseRequestedPage', () => {
+  it('collapses junk / undefined / below-1 values to 1', () => {
+    expect(parseRequestedPage(undefined)).toBe(1)
+    expect(parseRequestedPage(null)).toBe(1)
+    expect(parseRequestedPage('abc')).toBe(1)
+    expect(parseRequestedPage('')).toBe(1)
+    expect(parseRequestedPage(NaN)).toBe(1)
+    expect(parseRequestedPage(0)).toBe(1)
+    expect(parseRequestedPage(-4)).toBe(1)
+  })
+
+  it('keeps a valid page number (string or number), floored', () => {
+    expect(parseRequestedPage(3)).toBe(3)
+    expect(parseRequestedPage('5')).toBe(5)
+    expect(parseRequestedPage(2.9)).toBe(2)
+  })
+
+  it('has no upper bound — overshoot survives for the fetch layer to clamp', () => {
+    expect(parseRequestedPage(999)).toBe(999)
+    expect(parseRequestedPage('1000')).toBe(1000)
   })
 })
 

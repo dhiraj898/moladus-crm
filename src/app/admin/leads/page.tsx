@@ -1,10 +1,12 @@
 import Link from 'next/link'
-import { searchLeads, type LeadFilters } from '@/features/records/queries'
+import { searchLeads, searchLeadsPaged, type LeadFilters } from '@/features/records/queries'
 import { listProducts } from '@/features/products/actions'
 import { listForms } from '@/features/forms/queries'
 import { listAssignableUsers } from '@/features/rbac/queries'
 import { requireModuleView } from '@/features/rbac/guard'
 import { scopeFor } from '@/features/rbac/can'
+import { clampPageSize } from '@/features/views/paginationMath'
+import { fetchPagedClamped } from '@/features/views/fetchPagedClamped'
 import LeadsViews from './LeadsViews'
 
 /**
@@ -43,12 +45,24 @@ export default async function LeadsPage({
 
   const allScope = scopeFor(ctx.permissions, 'leads') === 'all'
 
-  const [leads, products, forms, owners] = await Promise.all([
+  // Table/List pagination — URL is the source of truth. `pageSize` clamped to
+  // the allowed set (default 25); `page` clamped to `[1, pageCount]` once total
+  // is known (an out-of-range `?page` is corrected to the last page by
+  // `fetchPagedClamped` so it never renders an empty table). Kanban keeps its
+  // own full fetch (WS3 replaces it), so both run.
+  const pageSize = clampPageSize(first(sp.pageSize))
+
+  const [leads, pagedLeads, products, forms, owners] = await Promise.all([
     searchLeads(filters, undefined, ctx),
+    fetchPagedClamped(first(sp.page), pageSize, (window) =>
+      searchLeadsPaged(filters, window, ctx)
+    ),
     listProducts(),
     listForms(),
     allScope ? listAssignableUsers() : Promise.resolve([]),
   ])
+
+  const page = pagedLeads.page
 
   // Seed the FilterBar controls from the current URL params (design: filters
   // live in the URL so a view switch preserves them and links are shareable).
@@ -96,6 +110,8 @@ export default async function LeadsPage({
 
       <LeadsViews
         leads={leads}
+        pagedLeads={pagedLeads.rows}
+        pagination={{ total: pagedLeads.total, page, pageSize }}
         products={products.map((p) => ({ id: p.id, name: p.name }))}
         forms={forms.map((f) => ({ id: f.id, name: f.name }))}
         owners={owners.map((u) => ({ id: u.id, label: u.email ?? u.id }))}

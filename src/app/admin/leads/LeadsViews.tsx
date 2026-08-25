@@ -45,12 +45,19 @@ function formatDate(iso: string | null): string {
 
 export default function LeadsViews({
   leads,
+  pagedLeads,
+  pagination,
   products,
   forms,
   owners,
   filterValues,
 }: {
+  /** Full (kanban) set — grouped by status, drag-to-move. */
   leads: LeadListItem[]
+  /** The current Table/List page window (RBAC-scoped, filtered, paged). */
+  pagedLeads: LeadListItem[]
+  /** Page footer state for Table/List (total across all pages). */
+  pagination: { total: number; page: number; pageSize: number }
   products: { id: string; name: string }[]
   forms: { id: string; name: string }[]
   /** Owner options; empty for own-scope callers (no owner filter shown). */
@@ -162,19 +169,21 @@ export default function LeadsViews({
       ) : mode === 'table' ? (
         <TableView
           columns={columns}
-          rows={leads}
+          rows={pagedLeads}
           rowKey={(l) => l.id}
           href={(l) => `/admin/leads/${l.id}`}
           emptyTitle="No leads found"
           emptyHint="Adjust the filters or wait for new submissions to arrive."
+          pagination={pagination}
         />
       ) : (
         <ListView
           card={card}
-          rows={leads}
+          rows={pagedLeads}
           rowKey={(l) => l.id}
           emptyTitle="No leads found"
           emptyHint="Adjust the filters or wait for new submissions to arrive."
+          pagination={pagination}
         />
       )}
     </div>

@@ -68,11 +68,18 @@ function formatDate(iso: string | null): string {
 
 export default function DealsViews({
   deals,
+  pagedDeals,
+  pagination,
   stages,
   owners,
   filterValues,
 }: {
+  /** Full (kanban) set — grouped by stage, drag-to-move. */
   deals: DealListItem[]
+  /** The current Table/List page window (RBAC-scoped, filtered, paged). */
+  pagedDeals: DealListItem[]
+  /** Page footer state for Table/List (total across all pages). */
+  pagination: { total: number; page: number; pageSize: number }
   stages: { id: string; name: string }[]
   /** Owner options; empty for own-scope callers (no owner filter shown). */
   owners: { id: string; label: string }[]
@@ -191,19 +198,21 @@ export default function DealsViews({
       ) : mode === 'table' ? (
         <TableView
           columns={columns}
-          rows={deals}
+          rows={pagedDeals}
           rowKey={(d) => d.id}
           href={(d) => `/admin/deals/${d.id}`}
           emptyTitle="No deals found"
           emptyHint="Adjust the filters or wait for new enrollments to convert."
+          pagination={pagination}
         />
       ) : (
         <ListView
           card={card}
-          rows={deals}
+          rows={pagedDeals}
           rowKey={(d) => d.id}
           emptyTitle="No deals found"
           emptyHint="Adjust the filters or wait for new enrollments to convert."
+          pagination={pagination}
         />
       )}
     </div>

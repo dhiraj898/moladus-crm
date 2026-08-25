@@ -1,6 +1,8 @@
 import Link from 'next/link'
-import { listFormsFiltered, type FormFilters } from '@/features/records/queries'
+import { listFormsPaged, type FormFilters } from '@/features/records/queries'
 import { listProducts } from '@/features/products/actions'
+import { clampPageSize } from '@/features/views/paginationMath'
+import { fetchPagedClamped } from '@/features/views/fetchPagedClamped'
 import FormsViews from './FormsViews'
 
 /**
@@ -33,10 +35,19 @@ export default async function FormsPage({
     productId: first(sp.productId),
   }
 
-  const [forms, products] = await Promise.all([
-    listFormsFiltered(filters),
+  // Table/List pagination — URL is the source of truth (default 25/page); an
+  // out-of-range `?page` is corrected to the last page by `fetchPagedClamped`.
+  const pageSize = clampPageSize(first(sp.pageSize))
+
+  const [pagedForms, products] = await Promise.all([
+    fetchPagedClamped(first(sp.page), pageSize, (window) =>
+      listFormsPaged(filters, window)
+    ),
     listProducts(),
   ])
+
+  const forms = pagedForms.rows
+  const page = pagedForms.page
 
   const filterValues: Record<string, string> = {
     q: filters.q ?? '',
@@ -63,6 +74,7 @@ export default async function FormsPage({
 
       <FormsViews
         forms={forms}
+        pagination={{ total: pagedForms.total, page, pageSize }}
         products={products.map((p) => ({ id: p.id, name: p.name }))}
         appUrl={APP_URL}
         filterValues={filterValues}

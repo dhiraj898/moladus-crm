@@ -1,9 +1,11 @@
 import Link from 'next/link'
-import { listDeals, type DealFilters } from '@/features/records/queries'
+import { listDeals, listDealsPaged, type DealFilters } from '@/features/records/queries'
 import { listStages } from '@/features/crm/stages/queries'
 import { listAssignableUsers } from '@/features/rbac/queries'
 import { requireModuleView } from '@/features/rbac/guard'
 import { scopeFor } from '@/features/rbac/can'
+import { clampPageSize } from '@/features/views/paginationMath'
+import { fetchPagedClamped } from '@/features/views/fetchPagedClamped'
 import DealsViews from './DealsViews'
 
 /**
@@ -40,11 +42,24 @@ export default async function DealsPage({
 
   const allScope = scopeFor(ctx.permissions, 'deals') === 'all'
 
-  const [stages, deals, owners] = await Promise.all([
+  // Table/List pagination — URL is the source of truth. `pageSize` is clamped to
+  // the allowed set (default 25); `page` is clamped to `[1, pageCount]` after we
+  // know the total (an out-of-range `?page` is corrected to the last page by
+  // `fetchPagedClamped` so it never renders an empty table). Kanban keeps its own
+  // full fetch (WS3 replaces it with per-column counts + load-more), so both
+  // queries run here.
+  const pageSize = clampPageSize(first(sp.pageSize))
+
+  const [stages, deals, pagedDeals, owners] = await Promise.all([
     listStages(),
     listDeals(filters, undefined, ctx),
+    fetchPagedClamped(first(sp.page), pageSize, (window) =>
+      listDealsPaged(filters, window, ctx)
+    ),
     allScope ? listAssignableUsers() : Promise.resolve([]),
   ])
+
+  const page = pagedDeals.page
 
   // Seed the FilterBar controls from the current URL params (design: filters
   // live in the URL so a view switch preserves them and links are shareable).
@@ -91,6 +106,8 @@ export default async function DealsPage({
 
       <DealsViews
         deals={deals}
+        pagedDeals={pagedDeals.rows}
+        pagination={{ total: pagedDeals.total, page, pageSize }}
         stages={stages.map((s) => ({ id: s.id, name: s.name }))}
         owners={owners.map((u) => ({ id: u.id, label: u.email ?? u.id }))}
         filterValues={filterValues}

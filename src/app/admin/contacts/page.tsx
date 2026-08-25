@@ -1,5 +1,7 @@
 import Link from 'next/link'
-import { listContactsFiltered, type ContactFilters } from '@/features/records/queries'
+import { listContactsPaged, type ContactFilters } from '@/features/records/queries'
+import { clampPageSize } from '@/features/views/paginationMath'
+import { fetchPagedClamped } from '@/features/views/fetchPagedClamped'
 import ContactsViews from './ContactsViews'
 
 /**
@@ -27,7 +29,16 @@ export default async function ContactsPage({
     consent: first(sp.consent),
   }
 
-  const contacts = await listContactsFiltered(filters)
+  // Table/List pagination — URL is the source of truth (default 25/page); an
+  // out-of-range `?page` is corrected to the last page by `fetchPagedClamped`.
+  const pageSize = clampPageSize(first(sp.pageSize))
+  const {
+    rows: contacts,
+    total,
+    page,
+  } = await fetchPagedClamped(first(sp.page), pageSize, (window) =>
+    listContactsPaged(filters, window)
+  )
 
   const filterValues: Record<string, string> = {
     q: filters.q ?? '',
@@ -53,7 +64,11 @@ export default async function ContactsPage({
         </Link>
       </div>
 
-      <ContactsViews contacts={contacts} filterValues={filterValues} />
+      <ContactsViews
+        contacts={contacts}
+        pagination={{ total, page, pageSize }}
+        filterValues={filterValues}
+      />
     </div>
   )
 }

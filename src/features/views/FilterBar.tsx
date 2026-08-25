@@ -53,6 +53,11 @@ export default function FilterBar({
       const params = new URLSearchParams(searchParams.toString())
       if (value) params.set(key, value)
       else params.delete(key)
+      // Any filter change resets pagination to page 1 (the current offset is
+      // meaningless against a newly filtered set); page 1 is the absent-param
+      // default, so we drop the key. `pageSize` is a display preference, not a
+      // filter, so it is preserved.
+      params.delete('page')
       const query = params.toString()
       router.replace(`${pathname}${query ? `?${query}` : ''}`, { scroll: false })
     },
@@ -80,6 +85,8 @@ export default function FilterBar({
   const handleReset = useCallback(() => {
     const params = new URLSearchParams(searchParams.toString())
     for (const f of filters) params.delete(f.key)
+    // Reset also drops pagination to page 1 (the filtered set changed).
+    params.delete('page')
     const query = params.toString()
     router.replace(`${pathname}${query ? `?${query}` : ''}`, { scroll: false })
   }, [router, pathname, searchParams, filters])
