@@ -18,7 +18,7 @@ const NAV_ITEMS: {
   { href: '/admin/products', label: 'Products', module: 'products' },
   { href: '/admin/forms', label: 'Forms', module: 'forms' },
   { href: '/admin/leads', label: 'Leads', module: 'leads' },
-  { href: '/admin/deals', label: 'Deals', module: 'deals' },
+  { href: '/admin/interest', label: 'Interests', module: 'deals' },
   { href: '/admin/contacts', label: 'Contacts', module: 'contacts' },
   { href: '/admin/settings', label: 'Settings', module: 'settings' },
 ]

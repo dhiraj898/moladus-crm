@@ -9,7 +9,7 @@ import CustomFieldDefRow from './CustomFieldDefRow'
 
 /**
  * Custom Fields editor (spec §8, plan Task 5.1). Client component driving the
- * per-entity definition CRUD: an entity selector (Products / Leads / Deals /
+ * per-entity definition CRUD: an entity selector (Products / Leads / Interests /
  * Contacts) switches which entity's fields are shown; below it a row-border
  * table (matching StagesEditor) lists that entity's defs with up/down reorder,
  * an active toggle, Edit, and Delete, followed by an expandable "Add a field"
@@ -22,7 +22,7 @@ import CustomFieldDefRow from './CustomFieldDefRow'
 const ENTITY_LABELS: Record<CustomFieldEntity, string> = {
   product: 'Products',
   lead: 'Leads',
-  deal: 'Deals',
+  deal: 'Interests',
   contact: 'Contacts',
 }
 

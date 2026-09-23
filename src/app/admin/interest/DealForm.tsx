@@ -192,7 +192,7 @@ export default function DealForm(props: Props) {
           setFieldErrors(result.fieldErrors ?? {})
           return
         }
-        router.push(`/admin/deals/${props.deal.id}`)
+        router.push(`/admin/interest/${props.deal.id}`)
         router.refresh()
         return
       }
@@ -214,7 +214,7 @@ export default function DealForm(props: Props) {
         // Surface the non-fatal link failure, then continue to the deal.
         window.alert(result.warning)
       }
-      router.push(`/admin/deals/${result.data.id}`)
+      router.push(`/admin/interest/${result.data.id}`)
       router.refresh()
     })
   }
@@ -374,7 +374,7 @@ export default function DealForm(props: Props) {
           type="button"
           onClick={() =>
             router.push(
-              mode === 'edit' ? `/admin/deals/${props.deal.id}` : '/admin/deals'
+              mode === 'edit' ? `/admin/interest/${props.deal.id}` : '/admin/interest'
             )
           }
           className="rounded-[8px] border border-line px-4 py-2.5 text-[15px] font-medium text-dim transition-colors hover:text-text"

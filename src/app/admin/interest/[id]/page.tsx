@@ -129,15 +129,15 @@ export default async function DealDetailPage({
     <div className="mx-auto max-w-[820px]">
       <div className="mb-6">
         <Link
-          href="/admin/deals"
+          href="/admin/interest"
           className="text-sm font-medium text-dim transition-colors hover:text-text"
         >
-          ← Deals
+          ← Interests
         </Link>
         <div className="mt-3 flex items-start justify-between gap-4">
           <div>
             <h1 className="text-2xl font-extrabold tracking-[-0.02em]">
-              {product?.name ?? 'Deal'}
+              {product?.name ?? 'Interest'}
             </h1>
             <p className="mt-1 text-sm text-dim">
               {contact?.name ?? lead?.name ?? 'Unknown customer'}
@@ -146,7 +146,7 @@ export default async function DealDetailPage({
           <div className="flex items-center gap-3">
             <PaymentStatusChip status={deal.payment_status} />
             <Link
-              href={`/admin/deals/${deal.id}/edit`}
+              href={`/admin/interest/${deal.id}/edit`}
               className="rounded-[8px] border border-line bg-surface px-4 py-2 text-sm font-semibold text-text transition-colors hover:bg-surface2"
             >
               Edit
@@ -182,7 +182,7 @@ export default async function DealDetailPage({
           </Row>
         </Card>
 
-        <Card title="Deal">
+        <Card title="Interest">
           <Row label="Base amount" mono>
             {formatMoney(deal.base_amount, currency)}
           </Row>

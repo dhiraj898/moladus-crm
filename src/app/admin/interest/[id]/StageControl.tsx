@@ -53,7 +53,7 @@ export default function StageControl({
         value={value}
         onChange={handleChange}
         disabled={isPending || stages.length === 0}
-        aria-label="Deal stage"
+        aria-label="Interest stage"
         className="rounded-[8px] border border-line bg-bg px-3 py-1.5 text-sm text-text outline-none transition-colors focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
       >
         {currentStageId ? null : (

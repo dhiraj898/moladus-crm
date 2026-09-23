@@ -20,6 +20,26 @@ const denyFraming = [
 ];
 
 const nextConfig: NextConfig = {
+  /**
+   * The Deals section was renamed to "Interests" (route /admin/deals →
+   * /admin/interest). Redirect the old paths so existing bookmarks/links keep
+   * working. Temporary (307) rather than permanent (308) to avoid hard browser
+   * caching while the rename settles.
+   */
+  async redirects() {
+    return [
+      {
+        source: "/admin/deals",
+        destination: "/admin/interest",
+        permanent: false,
+      },
+      {
+        source: "/admin/deals/:path*",
+        destination: "/admin/interest/:path*",
+        permanent: false,
+      },
+    ];
+  },
   async headers() {
     return [
       { source: "/admin/:path*", headers: denyFraming },

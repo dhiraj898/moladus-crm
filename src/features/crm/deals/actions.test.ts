@@ -181,7 +181,7 @@ describe('changeDealStage (plan Task 4.1)', () => {
       to: 'Enrolled',
     })
 
-    expect(revalidatePathMock).toHaveBeenCalledWith('/admin/deals/deal-1')
+    expect(revalidatePathMock).toHaveBeenCalledWith('/admin/interest/deal-1')
   })
 
   it('errors when the target stage does not exist', async () => {
