@@ -107,8 +107,8 @@ export async function assignDeal(
   if (error) return { ok: false, error: `Failed to assign deal: ${error.message}` }
 
   await logActivity('deal', dealId, 'edited', { actorId: ctx.user.id })
-  revalidatePath(`/admin/deals/${dealId}`)
-  revalidatePath('/admin/deals')
+  revalidatePath(`/admin/interest/${dealId}`)
+  revalidatePath('/admin/interest')
   return { ok: true, data: undefined }
 }
 

@@ -37,7 +37,7 @@ const MODULE_LABELS: Record<ModuleKey, string> = {
   products: 'Products',
   forms: 'Forms',
   leads: 'Leads',
-  deals: 'Deals',
+  deals: 'Interests',
   contacts: 'Contacts',
   settings: 'Settings',
   automation: 'Automation',
@@ -134,7 +134,7 @@ export default function RolesEditor({ roles }: { roles: Role[] }) {
         <h2 className="text-lg font-bold tracking-[-0.01em]">Roles</h2>
         <p className="mt-1 text-sm text-dim">
           Each role carries a per-module permission matrix. Users map to one
-          role. Records modules (Leads, Deals) also choose whether the role sees
+          role. Records modules (Leads, Interests) also choose whether the role sees
           all records or only its own. The Admin role cannot be edited or
           deleted.
         </p>

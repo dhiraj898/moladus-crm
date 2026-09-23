@@ -26,13 +26,13 @@ export default async function NewDealPage() {
     <div className="mx-auto max-w-[960px]">
       <div className="mb-8">
         <Link
-          href="/admin/deals"
+          href="/admin/interest"
           className="text-sm font-medium text-dim transition-colors hover:text-text"
         >
-          ← Deals
+          ← Interests
         </Link>
         <h1 className="mt-3 text-2xl font-extrabold tracking-[-0.02em]">
-          New deal
+          New interest
         </h1>
         <p className="mt-1 text-sm text-dim">
           Bind a contact and product; GST is computed from the product.

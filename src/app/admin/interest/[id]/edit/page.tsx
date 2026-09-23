@@ -44,13 +44,13 @@ export default async function EditDealPage({
     <div className="mx-auto max-w-[960px]">
       <div className="mb-8">
         <Link
-          href={`/admin/deals/${id}`}
+          href={`/admin/interest/${id}`}
           className="text-sm font-medium text-dim transition-colors hover:text-text"
         >
-          ← Deal
+          ← Interest
         </Link>
         <h1 className="mt-3 text-2xl font-extrabold tracking-[-0.02em]">
-          Edit deal
+          Edit interest
         </h1>
         <p className="mt-1 text-sm text-dim">
           Changing the product or place of supply recomputes GST.

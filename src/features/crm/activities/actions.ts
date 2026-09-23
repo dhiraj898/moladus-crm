@@ -41,9 +41,20 @@ const ENTITY_MODULE: Record<ActivityEntity, ModuleKey> = {
   deal: 'deals',
 }
 
+/**
+ * Admin URL segment per entity. Usually the module key, except deals, whose
+ * section was renamed to "Interests" (route /admin/interest) while the RBAC
+ * module key and DB table stay `deals`.
+ */
+const ENTITY_PATH_SEGMENT: Record<ActivityEntity, string> = {
+  lead: 'leads',
+  contact: 'contacts',
+  deal: 'interest',
+}
+
 /** Map an entity to its admin detail route, used for revalidation. */
 function entityPath(entityType: ActivityEntity, entityId: string): string {
-  return `/admin/${ENTITY_MODULE[entityType]}/${entityId}`
+  return `/admin/${ENTITY_PATH_SEGMENT[entityType]}/${entityId}`
 }
 
 /**

@@ -117,5 +117,7 @@ export function firstAllowedModule(perms: Permissions): ModuleKey | null {
 export function modulePath(module: ModuleKey): string {
   if (module === 'settings') return '/admin/settings'
   if (module === 'automation') return '/admin/settings/automation'
+  // The `deals` module keeps its key/table, but its route is /admin/interest.
+  if (module === 'deals') return '/admin/interest'
   return `/admin/${module}`
 }

@@ -166,7 +166,7 @@ export async function changeDealStage(
     to: toName,
   })
 
-  revalidatePath(`/admin/deals/${dealId}`)
+  revalidatePath(`/admin/interest/${dealId}`)
   return { ok: true, data: undefined }
 }
 
@@ -364,8 +364,8 @@ export async function createDeal(
     warning = await tryCreatePaymentLink(supabase, dealId, product, gst.total, contact_id)
   }
 
-  revalidatePath('/admin/deals')
-  revalidatePath(`/admin/deals/${dealId}`)
+  revalidatePath('/admin/interest')
+  revalidatePath(`/admin/interest/${dealId}`)
   return warning
     ? { ok: true, data: { id: dealId }, warning }
     : { ok: true, data: { id: dealId } }
@@ -408,7 +408,7 @@ async function tryCreatePaymentLink(
         email: contact.email ?? undefined,
         contact: contact.whatsapp_number,
       },
-      callbackUrl: `${env.NEXT_PUBLIC_APP_URL}/admin/deals/${dealId}`,
+      callbackUrl: `${env.NEXT_PUBLIC_APP_URL}/admin/interest/${dealId}`,
       referenceId: dealId,
       notes: { deal_id: dealId, product_id: product.id },
     })
@@ -536,7 +536,7 @@ export async function updateDeal(
 
   await logActivity('deal', id, 'edited', { actorId: ctx.user.id })
 
-  revalidatePath('/admin/deals')
-  revalidatePath(`/admin/deals/${id}`)
+  revalidatePath('/admin/interest')
+  revalidatePath(`/admin/interest/${id}`)
   return { ok: true, data: undefined }
 }

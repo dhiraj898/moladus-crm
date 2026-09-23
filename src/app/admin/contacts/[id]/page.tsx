@@ -72,7 +72,7 @@ function Card({
 /** Render the linked-deals list for the contact detail page. */
 function LinkedDealsCard({ deals }: { deals: LinkedDeal[] }) {
   return (
-    <Card title="Deals">
+    <Card title="Interests">
       {deals.length === 0 ? (
         <p className="text-sm text-dim">No deals linked yet.</p>
       ) : (
@@ -83,12 +83,12 @@ function LinkedDealsCard({ deals }: { deals: LinkedDeal[] }) {
               className="border-b border-line py-2.5 last:border-b-0"
             >
               <Link
-                href={`/admin/deals/${deal.id}`}
+                href={`/admin/interest/${deal.id}`}
                 className="flex items-center justify-between gap-4"
               >
                 <div>
                   <div className="text-sm font-medium text-text">
-                    {deal.product_name ?? 'Deal'}
+                    {deal.product_name ?? 'Interest'}
                   </div>
                   <div className="text-xs text-dim">
                     {deal.stage_name ?? '—'} · {formatDateTime(deal.created_at)}

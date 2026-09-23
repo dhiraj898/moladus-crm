@@ -155,7 +155,7 @@ describe('addNote (plan Task 3.1)', () => {
     expect(result.ok).toBe(true)
     if (result.ok) expect(result.data.id).toBe('act-1')
     // Note refreshes the deal detail page.
-    expect(revalidatePathMock).toHaveBeenCalledWith('/admin/deals/deal-1')
+    expect(revalidatePathMock).toHaveBeenCalledWith('/admin/interest/deal-1')
   })
 
   it('revalidates the correct detail path per entity type', async () => {

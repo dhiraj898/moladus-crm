@@ -163,7 +163,7 @@ export default function DealsViews({
     () => ({
       title: (d) => d.contact?.name ?? 'Untitled deal',
       subtitle: (d) => d.product?.name ?? '—',
-      href: (d) => `/admin/deals/${d.id}`,
+      href: (d) => `/admin/interest/${d.id}`,
       meta: (d) => [
         { label: formatMoney(d.total_amount), tone: 'accent' },
         {
@@ -213,7 +213,7 @@ export default function DealsViews({
           columns={columns}
           rows={pagedDeals}
           rowKey={(d) => d.id}
-          href={(d) => `/admin/deals/${d.id}`}
+          href={(d) => `/admin/interest/${d.id}`}
           emptyTitle="No deals found"
           emptyHint="Adjust the filters or wait for new enrollments to convert."
           pagination={pagination}

@@ -115,9 +115,9 @@ export default async function DealsPage({
     <div className="mx-auto max-w-[1100px]">
       <div className="mb-6 flex items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-extrabold tracking-[-0.02em]">Deals</h1>
+          <h1 className="text-2xl font-extrabold tracking-[-0.02em]">Interests</h1>
           <p className="mt-1 text-sm text-dim">
-            Enrollment deals and their payment state.
+            Enrollment interests and their payment state.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -128,10 +128,10 @@ export default async function DealsPage({
             Export CSV
           </a>
           <Link
-            href="/admin/deals/new"
+            href="/admin/interest/new"
             className="rounded-[8px] bg-accent px-4 py-2.5 text-sm font-semibold text-white transition-opacity hover:opacity-90"
           >
-            New deal
+            New interest
           </Link>
         </div>
       </div>

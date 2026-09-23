@@ -82,7 +82,7 @@ export default function ContactsViews({
       },
       {
         key: 'deals',
-        header: 'Deals',
+        header: 'Interests',
         align: 'right',
         render: (c) => <span className="text-text">{c.dealCount}</span>,
       },
