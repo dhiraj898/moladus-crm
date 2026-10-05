@@ -5,8 +5,9 @@ import type { StageAction } from '@/lib/supabase/types'
  * Unit tests for the on-enter action runner (plan WS7 Task 7.1).
  *
  * Focus: an order-level deal (null `product_id`, lines in `deal_items`) must get
- * a payment link whose description summarises the lines — the runner must NOT
- * bail on a missing product. Supabase, Razorpay, AiSensy and logActivity are
+ * a payment link listing ALL item names in the description, plus an itemized
+ * `notes.items` breakdown and the `order_total` — the runner must NOT bail on a
+ * missing product. Supabase, Razorpay, AiSensy and logActivity are
  * mocked so this runs without a live DB or keys. The mutable `db` object feeds
  * the mock client per-test.
  */
@@ -24,7 +25,7 @@ const db: {
   deal: unknown
   contact: unknown
   product: unknown
-  dealItems: { product_name: string }[]
+  dealItems: { product_name: string; total_amount: number }[]
 } = { stageActions: [], deal: null, contact: null, product: null, dealItems: [] }
 
 /** A thenable + maybeSingle-terminal query builder returning a fixed result. */
@@ -111,7 +112,10 @@ beforeEach(() => {
   }
   db.contact = { name: 'Asha', email: 'a@test.com', whatsapp_number: '+919000000000' }
   db.product = null
-  db.dealItems = [{ product_name: 'Course A' }, { product_name: 'Course B' }]
+  db.dealItems = [
+    { product_name: 'Course A', total_amount: 1180 },
+    { product_name: 'Course B', total_amount: 1180 },
+  ]
 })
 
 describe('runStageActions — order-level create_payment_link', () => {
@@ -119,24 +123,36 @@ describe('runStageActions — order-level create_payment_link', () => {
     await runStageActions('deal_1', 'stage_1')
 
     expect(createPaymentLinkMock).toHaveBeenCalledTimes(1)
-    const arg = createPaymentLinkMock.mock.calls[0][0] as { description: string; amountPaise: number }
+    const arg = createPaymentLinkMock.mock.calls[0][0] as {
+      description: string
+      amountPaise: number
+      notes: Record<string, string | number>
+    }
     expect(arg.description).toBe('Course A, Course B')
-    expect(arg.description.length).toBeGreaterThan(0)
     expect(arg.amountPaise).toBe(236000)
+    // Razorpay notes carry the itemized breakdown + the order total.
+    expect(arg.notes.items).toBe('Course A ₹1,180.00; Course B ₹1,180.00')
+    expect(arg.notes.order_total).toBe(2360)
     expect(dealsUpdateMock).toHaveBeenCalledTimes(1)
   })
 
-  it('summarises three or more lines as "A, B, +N more"', async () => {
+  it('lists ALL item names in the description (no truncation) for 3+ lines', async () => {
     db.dealItems = [
-      { product_name: 'Course A' },
-      { product_name: 'Course B' },
-      { product_name: 'Course C' },
+      { product_name: 'Course A', total_amount: 1000 },
+      { product_name: 'Course B', total_amount: 1000 },
+      { product_name: 'Course C', total_amount: 1000 },
     ]
 
     await runStageActions('deal_1', 'stage_1')
 
-    const arg = createPaymentLinkMock.mock.calls[0][0] as { description: string }
-    expect(arg.description).toBe('Course A, Course B, +1 more')
+    const arg = createPaymentLinkMock.mock.calls[0][0] as {
+      description: string
+      notes: Record<string, string | number>
+    }
+    expect(arg.description).toBe('Course A, Course B, Course C')
+    expect(arg.notes.items).toBe(
+      'Course A ₹1,000.00; Course B ₹1,000.00; Course C ₹1,000.00'
+    )
   })
 
   it('falls back to the single product name for a legacy deal', async () => {
