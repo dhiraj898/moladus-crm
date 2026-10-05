@@ -10,6 +10,7 @@ import {
 } from 'react'
 import type { FormField } from '@/lib/supabase/types'
 import { useFormNav } from '@/features/form-engine/useFormNav'
+import { formatMoney } from '@/features/form-engine/estimate'
 import type { Answer } from '@/features/form-engine/visibility'
 
 /**
@@ -27,6 +28,19 @@ import type { Answer } from '@/features/form-engine/visibility'
  * never fetches config from the browser.
  */
 
+/**
+ * An offered product, as computed server-side in `PublicFormPage` (plan Task
+ * 5.1). `estimate` is a display-only per-item preview; it is `null` when the
+ * form opts out of showing prices (`hide_price`).
+ */
+export interface ProductOffering {
+  id: string
+  name: string
+  description: string | null
+  is_bundle: boolean
+  estimate: { total: number; gstRate: number; currency: string } | null
+}
+
 interface FormRunnerProps {
   formId: string
   fields: FormField[]
@@ -34,6 +48,8 @@ interface FormRunnerProps {
   submitLabel: string
   captchaEnabled: boolean
   ingestUrl: string
+  products: ProductOffering[]
+  hidePrice: boolean
 }
 
 /** True when a value counts as answered (for required validation). */
@@ -53,6 +69,8 @@ export default function FormRunner({
   submitLabel,
   captchaEnabled,
   ingestUrl,
+  products,
+  hidePrice,
 }: FormRunnerProps) {
   const nav = useFormNav(fields)
   const {
@@ -68,6 +86,12 @@ export default function FormRunner({
     back,
     setAnswerAndAdvance,
   } = nav
+
+  // ---- selection-first cart (plan Task 5.2) ----------------------------
+  // The customer picks one or more offered products before the field wizard.
+  // When nothing is offered we skip the gate and reveal the wizard directly.
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [selectionDone, setSelectionDone] = useState(() => products.length === 0)
 
   const [fieldError, setFieldError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
@@ -152,6 +176,7 @@ export default function FormRunner({
           form_id: formId,
           answers,
           captcha_token: captchaToken,
+          selected_products: selectedIds,
         }),
       })
       const data = (await res.json().catch(() => null)) as {
@@ -193,6 +218,7 @@ export default function FormRunner({
     ingestUrl,
     formId,
     answers,
+    selectedIds,
   ])
 
   // ---- navigation helpers ---------------------------------------------
@@ -246,6 +272,20 @@ export default function FormRunner({
           </p>
         </div>
       </div>
+    )
+  }
+
+  // Selection-first gate: pick products before the field wizard is revealed.
+  if (!selectionDone) {
+    return (
+      <ProductSelection
+        products={products}
+        hidePrice={hidePrice}
+        selectedIds={selectedIds}
+        setSelectedIds={setSelectedIds}
+        welcomeMessage={welcomeMessage}
+        onContinue={() => setSelectionDone(true)}
+      />
     )
   }
 
@@ -604,6 +644,158 @@ function FieldView({
       )
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Selection-first cart (plan Task 5.2)
+// ---------------------------------------------------------------------------
+
+interface ProductSelectionProps {
+  products: ProductOffering[]
+  hidePrice: boolean
+  selectedIds: string[]
+  setSelectedIds: React.Dispatch<React.SetStateAction<string[]>>
+  welcomeMessage: string | null
+  onContinue: () => void
+}
+
+function ProductSelection({
+  products,
+  hidePrice,
+  selectedIds,
+  setSelectedIds,
+  welcomeMessage,
+  onContinue,
+}: ProductSelectionProps) {
+  const singles = products.filter((p) => !p.is_bundle)
+  const bundles = products.filter((p) => p.is_bundle)
+
+  const toggle = (id: string) =>
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((v) => v !== id) : [...prev, id]
+    )
+
+  // Running total over selected items that carry a price estimate. Hidden
+  // entirely when the form opts out of showing prices.
+  const selected = products.filter((p) => selectedIds.includes(p.id))
+  const currency = selected.find((p) => p.estimate)?.estimate?.currency ?? 'INR'
+  const runningTotal = selected.reduce(
+    (sum, p) => sum + (p.estimate?.total ?? 0),
+    0
+  )
+  const showTotal = !hidePrice && selected.length > 0
+
+  const canContinue = selectedIds.length > 0
+
+  const card = (p: ProductOffering) => {
+    const isOn = selectedIds.includes(p.id)
+    return (
+      <button
+        key={p.id}
+        type="button"
+        onClick={() => toggle(p.id)}
+        aria-pressed={isOn}
+        className={`flex w-full items-start gap-3 rounded-[12px] border px-4 py-4 text-left transition-colors ${
+          isOn
+            ? 'border-accent bg-surface2'
+            : 'border-line bg-surface hover:border-faint'
+        }`}
+      >
+        <span
+          aria-hidden
+          className={`mt-0.5 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-[6px] border text-xs ${
+            isOn ? 'border-accent bg-accent text-white' : 'border-faint'
+          }`}
+        >
+          {isOn ? '✓' : ''}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-[15px] font-semibold tracking-[-0.01em]">
+            {p.name}
+          </span>
+          {p.description ? (
+            <span className="mt-1 block text-sm leading-[1.6] text-dim">
+              {p.description}
+            </span>
+          ) : null}
+        </span>
+        {!hidePrice && p.estimate ? (
+          <span className="flex-shrink-0 text-right">
+            <span className="block tabular-nums text-[15px] font-bold tracking-[-0.01em]">
+              {formatMoney(p.estimate.total, p.estimate.currency)}
+            </span>
+            <span className="block text-xs text-dim">
+              {p.estimate.gstRate > 0
+                ? `incl. ${p.estimate.gstRate}% GST`
+                : 'no GST'}
+            </span>
+          </span>
+        ) : null}
+      </button>
+    )
+  }
+
+  return (
+    <div className="flex flex-1 flex-col">
+      <div className="flex-1 px-6 py-10">
+        <div className="mx-auto w-full max-w-[560px]">
+          {welcomeMessage ? (
+            <p className="mb-6 text-sm leading-[1.7] text-dim">
+              {welcomeMessage}
+            </p>
+          ) : null}
+
+          <h2 className="text-xl font-bold tracking-[-0.01em]">
+            What would you like to enroll in?
+          </h2>
+          <p className="mt-1 text-sm text-dim">Select one or more to continue.</p>
+
+          {singles.length > 0 ? (
+            <div className="mt-6 flex flex-col gap-2">
+              {singles.map(card)}
+            </div>
+          ) : null}
+
+          {bundles.length > 0 ? (
+            <div className="mt-8">
+              <h3 className="text-xs font-semibold uppercase tracking-[0.16em] text-accent">
+                Bundles
+              </h3>
+              <div className="mt-3 flex flex-col gap-2">{bundles.map(card)}</div>
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      {/* Sticky running total + continue */}
+      <div className="sticky bottom-0 border-t border-line bg-surface/80 px-6 py-4 backdrop-blur">
+        <div className="mx-auto flex max-w-[560px] items-center justify-between gap-4">
+          {showTotal ? (
+            <div className="min-w-0">
+              <div className="text-xs text-dim">Total</div>
+              <div className="tabular-nums text-lg font-extrabold tracking-[-0.01em]">
+                {formatMoney(runningTotal, currency)}
+              </div>
+            </div>
+          ) : (
+            <div className="min-w-0 text-sm text-dim">
+              {selectedIds.length > 0
+                ? `${selectedIds.length} selected`
+                : 'Nothing selected yet'}
+            </div>
+          )}
+          <button
+            type="button"
+            onClick={onContinue}
+            disabled={!canContinue}
+            className="inline-flex flex-shrink-0 items-center gap-2 rounded-[8px] bg-accent px-5 py-2.5 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-40"
+          >
+            Continue
+          </button>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 function Spinner() {
