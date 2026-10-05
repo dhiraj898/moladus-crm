@@ -4,7 +4,8 @@ import { evaluateCondition } from './conditions'
 import { moveDealStageAsSystem } from './moveStage'
 import { sendWhatsAppTemplate } from '@/features/aisensy/send'
 import { logActivity } from '@/features/crm/activities/service'
-import type { Contact, Deal, Product, SlaRule } from '@/lib/supabase/types'
+import { loadLineSummary } from './orderSummary'
+import type { Contact, Deal, SlaRule } from '@/lib/supabase/types'
 
 /**
  * Time-based SLA scanner (design §5 + §8, plan WS4 Task 4.1).
@@ -175,10 +176,11 @@ async function dispatchSendWhatsApp(supabase: Supa, rule: SlaRule, deal: Deal): 
     return
   }
 
-  const product = await loadProduct(supabase, deal.product_id)
   const name = contact.name ?? 'there'
   const paymentLink = deal.razorpay_payment_link_url ?? ''
-  const productName = product?.name ?? ''
+  // Order-level summary: joins `deal_items` for multi-line orders (product_id
+  // null) and falls back to the single product's name for legacy deals.
+  const productName = await loadLineSummary(deal.id, deal.product_id)
 
   await sendWhatsAppTemplate({
     dealId: deal.id,
@@ -220,17 +222,4 @@ async function loadContact(
     .eq('id', contactId)
     .maybeSingle()
   return (data as Pick<Contact, 'name' | 'whatsapp_number'> | null) ?? null
-}
-
-async function loadProduct(
-  supabase: Supa,
-  productId: string | null
-): Promise<Pick<Product, 'name'> | null> {
-  if (!productId) return null
-  const { data } = await supabase
-    .from('products')
-    .select('name')
-    .eq('id', productId)
-    .maybeSingle()
-  return (data as Pick<Product, 'name'> | null) ?? null
 }
