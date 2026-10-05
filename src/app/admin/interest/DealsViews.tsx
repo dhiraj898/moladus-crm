@@ -66,6 +66,20 @@ function formatDate(iso: string | null): string {
   return new Intl.DateTimeFormat('en-IN', { dateStyle: 'medium' }).format(d)
 }
 
+/**
+ * Column/subtitle label for the product(s) on a deal: the single bound product
+ * when present (legacy + manual single-item deals), else a summary of the
+ * snapshotted order lines — the first two product names plus a `+N` tail, or an
+ * `N items` count fallback when names are unavailable.
+ */
+function dealProductLabel(d: DealListItem): string {
+  if (d.product?.name) return d.product.name
+  const names = d.item_names
+  if (names.length === 0) return '—'
+  if (names.length <= 2) return names.join(', ')
+  return `${names.slice(0, 2).join(', ')} +${names.length - 2}`
+}
+
 export default function DealsViews({
   boardRows,
   boardTotals,
@@ -133,7 +147,7 @@ export default function DealsViews({
       {
         key: 'product',
         header: 'Product',
-        render: (d) => d.product?.name ?? '—',
+        render: (d) => dealProductLabel(d),
       },
       { key: 'stage', header: 'Stage', render: (d) => d.stage_name ?? '—' },
       {
@@ -162,7 +176,7 @@ export default function DealsViews({
   const card = useMemo<CardDef<DealListItem>>(
     () => ({
       title: (d) => d.contact?.name ?? 'Untitled deal',
-      subtitle: (d) => d.product?.name ?? '—',
+      subtitle: (d) => dealProductLabel(d),
       href: (d) => `/admin/interest/${d.id}`,
       meta: (d) => [
         { label: formatMoney(d.total_amount), tone: 'accent' },

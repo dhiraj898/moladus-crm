@@ -9,6 +9,7 @@ import type { CurrentUserWithRole } from '@/features/rbac/permissions'
 import type {
   Contact,
   Deal,
+  DealItem,
   Lead,
   NotificationLog,
   PaymentStatus,
@@ -349,10 +350,12 @@ export type DealListItem = Deal & {
   contact: { id: string; name: string | null; whatsapp_number: string } | null
   /** Manual sales-stage name, joined from `stages` (null when unset). */
   stage_name: string | null
+  /** Snapshotted line-item product names (empty for legacy single-product deals). */
+  item_names: string[]
 }
 
 const DEAL_SELECT =
-  '*, product:products (id, name), contact:contacts (id, name, whatsapp_number), stage:stages (id, name)'
+  '*, product:products (id, name), contact:contacts (id, name, whatsapp_number), stage:stages (id, name), items:deal_items (product_name)'
 
 /** Resolved contact/product ids a free-text deal search matched, or a sentinel
  * that no id matched (so the caller short-circuits to an empty result). */
@@ -449,13 +452,18 @@ function buildDealsQuery(
   return query
 }
 
-/** Map a joined deal row (with a nested `stage`) to the flat {@link DealListItem}. */
+/** Map a joined deal row (with a nested `stage` + `items`) to the flat {@link DealListItem}. */
 function toDealListItem(row: unknown): DealListItem {
-  type Row = Omit<DealListItem, 'stage_name'> & {
+  type Row = Omit<DealListItem, 'stage_name' | 'item_names'> & {
     stage: { id: string; name: string } | null
+    items: { product_name: string }[] | null
   }
-  const { stage, ...rest } = row as Row
-  return { ...rest, stage_name: stage?.name ?? null }
+  const { stage, items, ...rest } = row as Row
+  return {
+    ...rest,
+    stage_name: stage?.name ?? null,
+    item_names: (items ?? []).map((i) => i.product_name),
+  }
 }
 
 /**
@@ -950,6 +958,8 @@ export interface DealTimeline {
   lead: Lead | null
   contact: Contact | null
   product: Product | null
+  /** Snapshotted order lines, oldest first (empty for legacy single-product deals). */
+  items: DealItem[]
   /** Current manual sales stage, joined from `stages` (null when unset). */
   stage: Stage | null
   notifications: NotificationLog[]
@@ -974,7 +984,7 @@ export async function getDealTimeline(
   const { data, error } = await supabase
     .from('deals')
     .select(
-      '*, lead:leads (*), contact:contacts (*), product:products (*), stage:stages (*), notifications:notification_log (*)'
+      '*, lead:leads (*), contact:contacts (*), product:products (*), items:deal_items (*), stage:stages (*), notifications:notification_log (*)'
     )
     .eq('id', id)
     .maybeSingle()
@@ -986,6 +996,7 @@ export async function getDealTimeline(
     lead: Lead | null
     contact: Contact | null
     product: Product | null
+    items: DealItem[] | null
     stage: Stage | null
     notifications: NotificationLog[] | null
   }
@@ -997,7 +1008,7 @@ export async function getDealTimeline(
     if (ownerId && row.owner_id !== ownerId) return null
   }
 
-  const { lead, contact, product, stage, notifications, ...deal } = row
+  const { lead, contact, product, items, stage, notifications, ...deal } = row
 
   const sorted = [...(notifications ?? [])].sort((a, b) => {
     const at = a.sent_at ? new Date(a.sent_at).getTime() : 0
@@ -1005,7 +1016,13 @@ export async function getDealTimeline(
     return at - bt
   })
 
-  return { deal, lead, contact, product, stage, notifications: sorted }
+  const sortedItems = [...(items ?? [])].sort((a, b) => {
+    const at = a.created_at ? new Date(a.created_at).getTime() : 0
+    const bt = b.created_at ? new Date(b.created_at).getTime() : 0
+    return at - bt
+  })
+
+  return { deal, lead, contact, product, items: sortedItems, stage, notifications: sorted }
 }
 
 // ---------------------------------------------------------------------------
