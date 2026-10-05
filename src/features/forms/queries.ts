@@ -18,11 +18,45 @@ export type FormListItem = Form & {
   product: { id: string; name: string; active: boolean | null } | null
 }
 
-/** A form with its ordered fields and bound product, for the builder screen. */
+/** A form with its ordered fields and offered products, for the builder screen.
+ * `products` is the ordered offered catalogue (via form_products); `product` is
+ * kept as `products[0] ?? null` so existing single-product consumers compile. */
 export interface FormWithFields {
   form: Form
   fields: FormField[]
   product: Product | null
+  products: Product[]
+}
+
+/** Ordered products a form offers (via form_products); falls back to the
+ * legacy forms.product_id as a single-item offering when no join rows exist. */
+async function loadFormProducts(
+  supabase: ReturnType<typeof getServiceClient>,
+  form: Form
+): Promise<Product[]> {
+  const { data: links, error } = await supabase
+    .from('form_products')
+    .select('product_id, display_order, product:products (*)')
+    .eq('form_id', form.id)
+    .order('display_order', { ascending: true })
+  if (error) throw new Error(`Failed to load form products: ${error.message}`)
+
+  const rows = (links ?? []) as unknown as {
+    product: Product | null
+  }[]
+  const products = rows.map((r) => r.product).filter((p): p is Product => !!p)
+  if (products.length > 0) return products
+
+  // Legacy back-compat: a form still using forms.product_id.
+  if (form.product_id) {
+    const { data: p } = await supabase
+      .from('products')
+      .select('*')
+      .eq('id', form.product_id)
+      .maybeSingle()
+    if (p) return [p as Product]
+  }
+  return []
 }
 
 /** Fetch every form (newest first) with its bound product name. */
@@ -69,22 +103,14 @@ export async function getPublishedFormBySlug(
   if (fieldsError)
     throw new Error(`Failed to load fields: ${fieldsError.message}`)
 
-  let product: Product | null = null
-  if ((form as Form).product_id) {
-    const { data: productRow, error: productError } = await supabase
-      .from('products')
-      .select('*')
-      .eq('id', (form as Form).product_id as string)
-      .maybeSingle()
-    if (productError)
-      throw new Error(`Failed to load product: ${productError.message}`)
-    product = (productRow as Product | null) ?? null
-  }
+  const products = await loadFormProducts(supabase, form as Form)
+  const product = products[0] ?? null
 
   return {
     form: form as Form,
     fields: (fields ?? []) as FormField[],
     product,
+    products,
   }
 }
 
@@ -112,21 +138,13 @@ export async function getFormWithFields(
   if (fieldsError)
     throw new Error(`Failed to load fields: ${fieldsError.message}`)
 
-  let product: Product | null = null
-  if ((form as Form).product_id) {
-    const { data: productRow, error: productError } = await supabase
-      .from('products')
-      .select('*')
-      .eq('id', (form as Form).product_id as string)
-      .maybeSingle()
-    if (productError)
-      throw new Error(`Failed to load product: ${productError.message}`)
-    product = (productRow as Product | null) ?? null
-  }
+  const products = await loadFormProducts(supabase, form as Form)
+  const product = products[0] ?? null
 
   return {
     form: form as Form,
     fields: (fields ?? []) as FormField[],
     product,
+    products,
   }
 }
