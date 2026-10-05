@@ -2,21 +2,23 @@
 
 import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
-import type { Form, Product } from '@/lib/supabase/types'
+import type { Form } from '@/lib/supabase/types'
 import { createForm, updateForm, type ActionResult } from './actions'
 import type { FormInputRaw } from './schema'
 
 /**
  * Create / edit the metadata for a single form (spec §4 — Forms).
  *
- * `products` is the list of ACTIVE products offered in the picker (one product
- * per form). On create the user is redirected into the field builder; on edit
- * the current screen refreshes with the saved values.
+ * Product selection now lives in the "Products offered" picker on the builder
+ * page (a form offers many products via `form_products`), so this form handles
+ * only name/slug/messaging. The legacy `forms.product_id` value is preserved
+ * untouched on edit for back-compat. On create the user is redirected into the
+ * builder; on edit the current screen refreshes with the saved values.
  */
 
 type Props =
-  | { mode: 'create'; form?: undefined; products: Product[] }
-  | { mode: 'edit'; form: Form; products: Product[] }
+  | { mode: 'create'; form?: undefined }
+  | { mode: 'edit'; form: Form }
 
 const inputClass =
   'rounded-[8px] border border-line bg-surface2 px-3.5 py-2.5 text-[15px] text-text outline-none transition-colors focus:border-accent'
@@ -42,7 +44,7 @@ function slugify(value: string): string {
     .replace(/^-+|-+$/g, '')
 }
 
-export default function FormMetaForm({ mode, form, products }: Props) {
+export default function FormMetaForm({ mode, form }: Props) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
 
@@ -52,7 +54,9 @@ export default function FormMetaForm({ mode, form, products }: Props) {
   const [name, setName] = useState(form?.name ?? '')
   const [slug, setSlug] = useState(form?.slug ?? '')
   const [slugEdited, setSlugEdited] = useState(mode === 'edit')
-  const [productId, setProductId] = useState(form?.product_id ?? '')
+  // Legacy single-product binding — not editable here (the offered catalogue is
+  // managed by the products picker), but preserved on save for back-compat.
+  const productId = form?.product_id ?? ''
   const [welcomeMessage, setWelcomeMessage] = useState(
     form?.welcome_message ?? ''
   )
@@ -132,27 +136,6 @@ export default function FormMetaForm({ mode, form, products }: Props) {
           The public form lives at <code>/f/{slug || 'your-slug'}</code>.
         </span>
         <FieldError messages={fieldErrors.slug} />
-      </label>
-
-      <label className="flex flex-col gap-1.5">
-        <span className={labelClass}>Product</span>
-        <select
-          value={productId}
-          onChange={(e) => setProductId(e.target.value)}
-          className={inputClass}
-        >
-          <option value="">Select a product…</option>
-          {products.map((product) => (
-            <option key={product.id} value={product.id}>
-              {product.name}
-              {product.code ? ` (${product.code})` : ''}
-            </option>
-          ))}
-        </select>
-        <span className="text-xs text-dim">
-          One product per form. Only active products are listed.
-        </span>
-        <FieldError messages={fieldErrors.product_id} />
       </label>
 
       <label className="flex flex-col gap-1.5">
