@@ -114,6 +114,23 @@ export async function getPublishedFormBySlug(
   }
 }
 
+/**
+ * The ordered product ids a form offers (via `form_products`), sorted by
+ * `display_order`. Returns an empty array when the form offers nothing. This is
+ * the id-only companion to {@link FormWithFields.products}, used by the builder
+ * picker and the publish invariant.
+ */
+export async function listFormProductIds(formId: string): Promise<string[]> {
+  const supabase = getServiceClient()
+  const { data, error } = await supabase
+    .from('form_products')
+    .select('product_id, display_order')
+    .eq('form_id', formId)
+    .order('display_order', { ascending: true })
+  if (error) throw new Error(`Failed to load form products: ${error.message}`)
+  return ((data ?? []) as { product_id: string }[]).map((r) => r.product_id)
+}
+
 /** Fetch a form with its ordered fields and bound product, or `null`. */
 export async function getFormWithFields(
   id: string
