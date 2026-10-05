@@ -162,6 +162,8 @@ export interface Product {
   gst_percentage: number | null
   price_mode: PriceMode | null
   active: boolean | null
+  is_bundle: boolean
+  bundle_components: string[] | null
   custom_fields: CustomFieldValues
   created_at: string | null
   updated_at: string | null
@@ -230,6 +232,7 @@ export interface Deal {
   lead_id: string | null
   contact_id: string | null
   product_id: string | null
+  form_id: string | null
   base_amount: number
   taxable_amount: number
   cgst: number | null
@@ -247,6 +250,28 @@ export interface Deal {
   custom_fields: CustomFieldValues
   created_at: string | null
   updated_at: string | null
+}
+
+export interface FormProduct {
+  id: string
+  form_id: string
+  product_id: string
+  display_order: number
+  created_at: string | null
+}
+
+export interface DealItem {
+  id: string
+  deal_id: string
+  product_id: string
+  product_name: string
+  base_price: number
+  taxable_amount: number
+  cgst: number
+  sgst: number
+  igst: number
+  total_amount: number
+  created_at: string | null
 }
 
 export interface NotificationLog {
