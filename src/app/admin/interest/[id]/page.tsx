@@ -105,8 +105,9 @@ export default async function DealDetailPage({
   const timeline = await getDealTimeline(id, ctx)
   if (!timeline) notFound()
 
-  const { deal, lead, contact, product, notifications } = timeline
+  const { deal, lead, contact, product, items, notifications } = timeline
   const currency = product?.currency ?? 'INR'
+  const orderTitle = product?.name ?? 'Order'
 
   const [stages, stageHistory, activity, customFieldDefs] = await Promise.all([
     listStages(),
@@ -182,7 +183,35 @@ export default async function DealDetailPage({
           </Row>
         </Card>
 
-        <Card title="Interest">
+        <Card title={items.length > 0 ? orderTitle : 'Interest'}>
+          {items.length > 0 ? (
+            <div className="border-b border-line pb-3">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-xs uppercase tracking-[0.08em] text-dim">
+                    <th className="py-1.5 text-left font-medium">Product</th>
+                    <th className="py-1.5 text-right font-medium">Base</th>
+                    <th className="py-1.5 text-right font-medium">Line total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {items.map((item) => (
+                    <tr key={item.id} className="border-t border-line">
+                      <td className="py-1.5 text-left font-medium text-text">
+                        {item.product_name}
+                      </td>
+                      <td className="py-1.5 text-right tabular-nums text-dim">
+                        {formatMoney(item.base_price, currency)}
+                      </td>
+                      <td className="py-1.5 text-right tabular-nums font-medium text-text">
+                        {formatMoney(item.total_amount, currency)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
           <Row label="Base amount" mono>
             {formatMoney(deal.base_amount, currency)}
           </Row>
