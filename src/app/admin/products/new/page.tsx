@@ -1,12 +1,16 @@
 import Link from 'next/link'
 import ProductForm from '@/features/products/ProductForm'
+import { listProducts } from '@/features/products/actions'
 import { getActiveCustomFieldDefs } from '@/features/crm/custom-fields/queries'
 
 /** Create a new product (spec §4). Wires ProductForm to `createProduct`. */
 export const dynamic = 'force-dynamic'
 
 export default async function NewProductPage() {
-  const customFieldDefs = await getActiveCustomFieldDefs('product')
+  const [customFieldDefs, products] = await Promise.all([
+    getActiveCustomFieldDefs('product'),
+    listProducts(),
+  ])
   return (
     <div className="mx-auto max-w-[960px]">
       <div className="mb-8">
@@ -20,7 +24,11 @@ export default async function NewProductPage() {
           New product
         </h1>
       </div>
-      <ProductForm mode="create" customFieldDefs={customFieldDefs} />
+      <ProductForm
+        mode="create"
+        customFieldDefs={customFieldDefs}
+        products={products}
+      />
     </div>
   )
 }
