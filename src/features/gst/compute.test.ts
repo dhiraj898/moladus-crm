@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { Product } from '@/lib/supabase/types'
-import { computeGST, round2 } from './compute'
+import { aggregateGST, computeGST, round2 } from './compute'
 
 const BUSINESS_STATE = 'MH'
 
@@ -99,5 +99,42 @@ describe('computeGST (spec §7)', () => {
     for (const amount of Object.values(result)) {
       expect(round2(amount)).toBe(amount)
     }
+  })
+})
+
+describe('aggregateGST', () => {
+  it('sums per-line splits with paise rounding', () => {
+    const lines = [
+      { cgst: 90, sgst: 90, igst: 0, taxableAmount: 1000, total: 1180 },
+      { cgst: 0, sgst: 0, igst: 45, taxableAmount: 500, total: 545 },
+    ]
+    expect(aggregateGST(lines)).toEqual({
+      cgst: 90,
+      sgst: 90,
+      igst: 45,
+      taxableAmount: 1500,
+      total: 1725,
+    })
+  })
+
+  it('handles a non-taxable line (all tax zero)', () => {
+    const lines = [{ cgst: 0, sgst: 0, igst: 0, taxableAmount: 299, total: 299 }]
+    expect(aggregateGST(lines)).toEqual({
+      cgst: 0,
+      sgst: 0,
+      igst: 0,
+      taxableAmount: 299,
+      total: 299,
+    })
+  })
+
+  it('rounds each accumulated field to 2 dp', () => {
+    const lines = [
+      { cgst: 0.333, sgst: 0.333, igst: 0, taxableAmount: 3.705, total: 4.371 },
+      { cgst: 0.334, sgst: 0.334, igst: 0, taxableAmount: 3.705, total: 4.373 },
+    ]
+    const r = aggregateGST(lines)
+    expect(r.cgst).toBe(0.67)
+    expect(r.total).toBe(8.74)
   })
 })
