@@ -4,7 +4,7 @@ import { revalidatePath } from 'next/cache'
 import { getServiceClient } from '@/lib/supabase/server'
 import { requirePermission } from '@/features/rbac/permissions'
 import type { Form, FormField } from '@/lib/supabase/types'
-import { getFormWithFields } from './queries'
+import { getFormWithFields, listFormProductIds } from './queries'
 import {
   formSchema,
   fieldSchema,
@@ -145,13 +145,17 @@ export async function publishForm(id: string): Promise<ActionResult<Form>> {
       error: 'Add at least one field before publishing.',
     }
   }
-  if (!loaded.product) {
+
+  // Multi-product invariant: a form must offer at least one product (via
+  // form_products) before it can go live.
+  const offered = await listFormProductIds(id)
+  if (offered.length === 0) {
     return {
       ok: false,
-      error: 'Bind a product to this form before publishing.',
+      error: 'Add at least one product before publishing this form.',
     }
   }
-  if (loaded.product.active === false) {
+  if (loaded.product && loaded.product.active === false) {
     return {
       ok: false,
       error: 'The bound product is inactive — activate it before publishing.',
@@ -199,6 +203,58 @@ export async function unpublishForm(id: string): Promise<ActionResult<Form>> {
   revalidatePath('/admin/forms')
   revalidatePath(`/admin/forms/${id}`)
   return { ok: true, data: data as Form }
+}
+
+/**
+ * Replace the full set of products a form offers (spec §4 — multi-product
+ * forms). The join rows for the form are deleted and re-inserted with a
+ * sequential `display_order` matching the given id order, so ordering is
+ * authoritative and idempotent. Mirrors the capability check + revalidation of
+ * the other form actions.
+ *
+ * `forms.product_id` is intentionally left untouched for back-compat; the
+ * offered catalogue now lives entirely in `form_products`.
+ */
+export async function setFormProducts(
+  formId: string,
+  productIds: string[]
+): Promise<ActionResult<void>> {
+  const gate = await requirePermission('forms', 'edit')
+  if (!gate.ok) return { ok: false, error: gate.error }
+
+  const supabase = getServiceClient()
+
+  const { error: delErr } = await supabase
+    .from('form_products')
+    .delete()
+    .eq('form_id', formId)
+  if (delErr) {
+    return {
+      ok: false,
+      error: `Failed to update offered products: ${delErr.message}`,
+    }
+  }
+
+  if (productIds.length > 0) {
+    const rows = productIds.map((product_id, i) => ({
+      form_id: formId,
+      product_id,
+      display_order: i,
+    }))
+    const { error: insErr } = await supabase
+      .from('form_products')
+      .insert(rows)
+    if (insErr) {
+      return {
+        ok: false,
+        error: `Failed to set offered products: ${insErr.message}`,
+      }
+    }
+  }
+
+  revalidatePath(`/admin/forms/${formId}`)
+  revalidatePath('/admin/forms')
+  return { ok: true, data: undefined }
 }
 
 // ---------------------------------------------------------------------------

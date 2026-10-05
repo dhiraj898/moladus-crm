@@ -7,7 +7,7 @@ import { getFormWithFields } from '@/features/forms/queries'
 import { applyBindings, validateAnswers } from '@/features/ingest/bind'
 import { checkRateLimit } from '@/features/ingest/rateLimit'
 import { verifyCaptcha } from '@/features/ingest/captcha'
-import { computeGST } from '@/features/gst/compute'
+import { buildOrderItems } from '@/features/crm/deals/orderItems'
 import { resolveEntryStage } from '@/features/crm/automation/entry'
 import { runStageActions } from '@/features/crm/automation/runActions'
 import { logActivity } from '@/features/crm/activities/service'
@@ -17,15 +17,17 @@ import { emitEvent } from '@/features/webhooks/emit'
 /**
  * Public submission pipeline (spec §6, steps 1–14).
  *
- * `POST /api/ingest` accepts `{ form_id, answers, captcha_token }` (optionally
- * `utm`) from the public FormRunner and drives the full enrollment flow:
- * rate limit → captcha → server-side visibility + validation → bind → dedupe →
- * persist (contact/lead/deal + GST) → Razorpay payment link → AiSensy WhatsApp
- * → `{ success, payment_link }`.
+ * `POST /api/ingest` accepts `{ form_id, answers, selected_products,
+ * captcha_token }` (optionally `utm`) from the public FormRunner and drives the
+ * full enrollment flow: rate limit → captcha → server-side visibility +
+ * validation → bind → dedupe → persist (contact/lead + one multi-line order:
+ * deal + deal_items with aggregated GST) → Razorpay payment link → AiSensy
+ * WhatsApp → `{ success, payment_link }`.
  *
  * Security posture: everything the browser sent is untrusted. Field definitions,
  * visibility, validation, GST, and pricing are all recomputed server-side from
- * the stored form + product; the client's answers are treated as raw input only.
+ * the stored form + its offered products (the carted `selected_products` ids are
+ * resolved against that offered set); the client's input is treated as raw only.
  * Supabase is reached exclusively via the service-role client (RLS deny-all),
  * and all secrets stay server-side.
  *
@@ -47,6 +49,7 @@ interface IngestBody {
   answers?: unknown
   captcha_token?: unknown
   utm?: unknown
+  selected_products?: unknown
 }
 
 /**
@@ -164,21 +167,22 @@ interface OpenDeal {
 }
 
 /**
- * Look up an existing OPEN deal (not in a terminal payment state) for a
- * contact + product. Returns its id and payment-link URL (which may be `null`
- * when a prior attempt created the deal but never got a link), or `null` when
- * no open deal exists.
+ * Look up an existing OPEN order (not in a terminal payment state) for a
+ * contact + form. One open order per customer per form (matching the
+ * `deals_open_order_dedupe` partial unique index). Returns its id and
+ * payment-link URL (which may be `null` when a prior attempt created the deal
+ * but never got a link), or `null` when no open order exists.
  */
-async function findOpenDeal(
+async function findOpenOrder(
   supabase: ReturnType<typeof getServiceClient>,
   contactId: string,
-  productId: string
+  formId: string
 ): Promise<OpenDeal | null> {
   const { data } = await supabase
     .from('deals')
     .select('id, razorpay_payment_link_url, payment_status')
     .eq('contact_id', contactId)
-    .eq('product_id', productId)
+    .eq('form_id', formId)
     .not('payment_status', 'in', '("paid","refunded","failed")')
     .maybeSingle()
 
@@ -212,6 +216,11 @@ export async function POST(req: Request): Promise<Response> {
     body.utm && typeof body.utm === 'object' && !Array.isArray(body.utm)
       ? (body.utm as Json)
       : {}
+  const selectedProductIds: string[] = Array.isArray(body.selected_products)
+    ? (body.selected_products as unknown[]).filter(
+        (v): v is string => typeof v === 'string'
+      )
+    : []
 
   if (!formId) {
     return fail('Missing form_id.', 400)
@@ -231,11 +240,21 @@ export async function POST(req: Request): Promise<Response> {
   if (!loaded || loaded.form.status !== 'published') {
     return fail('This form is not available.', 404)
   }
-  const { form, fields, product } = loaded
+  const { form, fields, products: offered } = loaded
 
-  // One product per form (locked default): a deal requires a bound product.
-  if (!product) {
-    return fail('This form is not configured for enrollment.', 400)
+  // Resolve the carted selection against the form's OFFERED products
+  // (server-side; the client's ids are untrusted). Only active, offered
+  // products survive — an order spans one or more of them.
+  // De-dupe the client's ids and resolve by iterating `offered`, so a crafted
+  // POST of `['p1','p1']` cannot produce two identical lines (doubling
+  // base/total/GST): each offered product appears at most once, and the line
+  // order is deterministic (the offered order) rather than client-controlled.
+  const requestedIds = new Set(selectedProductIds)
+  const selected = offered.filter(
+    (p) => requestedIds.has(p.id) && p.active !== false
+  )
+  if (selected.length === 0) {
+    return fail('Please select at least one item to enrol.', 400)
   }
 
   const validation = validateAnswers(fields, answers)
@@ -256,11 +275,11 @@ export async function POST(req: Request): Promise<Response> {
 
   const supabase = getServiceClient()
 
-  // 5. Idempotency: an existing OPEN deal for this contact + product returns its
-  // existing payment link instead of creating a duplicate. If the open deal has
+  // 5. Idempotency: an existing OPEN order for this contact + form returns its
+  // existing payment link instead of creating a duplicate. If the open order has
   // NO link yet (a prior Razorpay outage created the deal but never linked it),
   // resume it: create the link against the existing deal rather than 500-ing on
-  // the deal-dedupe unique index below.
+  // the order-dedupe unique index below.
   const { data: existingContactRow } = await supabase
     .from('contacts')
     .select('id')
@@ -269,7 +288,7 @@ export async function POST(req: Request): Promise<Response> {
   const existingContact = existingContactRow as Pick<Contact, 'id'> | null
 
   if (existingContact) {
-    const openDeal = await findOpenDeal(supabase, existingContact.id, product.id)
+    const openDeal = await findOpenOrder(supabase, existingContact.id, form.id)
     if (openDeal?.url) {
       return NextResponse.json({ success: true, payment_link: openDeal.url })
     }
@@ -286,7 +305,7 @@ export async function POST(req: Request): Promise<Response> {
     .from('leads')
     .insert({
       form_id: form.id,
-      product_id: product.id,
+      product_id: null,
       name: boundContact.name ?? null,
       email: boundContact.email ?? null,
       phone: whatsapp,
@@ -330,9 +349,12 @@ export async function POST(req: Request): Promise<Response> {
   }
   const contact = contactRow as Pick<Contact, 'id' | 'name' | 'email' | 'whatsapp_number'>
 
-  // 6c. Compute GST (authoritative, from the product row + customer state).
+  // 6c. Compute per-line snapshots + aggregated order totals (authoritative,
+  // from each product row + customer state). GST rate always comes from the
+  // product; the lines are snapshotted onto `deal_items` so later catalogue
+  // edits never alter this order.
   const customerState = boundLead.state ?? ''
-  const gst = computeGST(product, customerState)
+  const { items, totals } = buildOrderItems(selected, customerState)
 
   // 6d. Resolve the ENTRY stage from the submission's answers via the
   // configured entry rules (falling back to `stages.is_default` when no rule
@@ -342,22 +364,25 @@ export async function POST(req: Request): Promise<Response> {
   const stageId = await resolveEntryStage(answers)
   const now = new Date().toISOString()
 
-  // 6e. Insert Deal. The partial unique index `deals_open_dedupe` guards against
-  // a race: two concurrent submissions can both pass the step-5 check, but only
-  // one open deal per (contact, product) can exist — the loser catches the
-  // unique violation and returns the winner's link.
+  // 6e. Insert the order (one `deals` row spanning the carted items;
+  // `product_id` is null — the lines live in `deal_items`). The partial unique
+  // index `deals_open_order_dedupe` guards against a race: two concurrent
+  // submissions can both pass the step-5 check, but only one open order per
+  // (contact, form) can exist — the loser catches the unique violation and
+  // returns the winner's link.
   const { data: dealRow, error: dealError } = await supabase
     .from('deals')
     .insert({
       lead_id: leadId,
       contact_id: contact.id,
-      product_id: product.id,
-      base_amount: product.base_price,
-      taxable_amount: gst.taxableAmount,
-      cgst: gst.cgst,
-      sgst: gst.sgst,
-      igst: gst.igst,
-      total_amount: gst.total,
+      product_id: null,
+      form_id: form.id,
+      base_amount: totals.base_amount,
+      taxable_amount: totals.taxable_amount,
+      cgst: totals.cgst,
+      sgst: totals.sgst,
+      igst: totals.igst,
+      total_amount: totals.total_amount,
       place_of_supply: boundLead.state ?? null,
       stage_id: stageId,
       stage_entered_at: now,
@@ -368,22 +393,41 @@ export async function POST(req: Request): Promise<Response> {
 
   if (dealError || !dealRow) {
     if (dealError?.code === UNIQUE_VIOLATION) {
-      // Race lost OR a prior attempt left a stuck open deal: an open deal
-      // already exists for this contact + product.
-      const openDeal = await findOpenDeal(supabase, contact.id, product.id)
+      // Race lost OR a prior attempt left a stuck open order: an open order
+      // already exists for this contact + form.
+      const openDeal = await findOpenOrder(supabase, contact.id, form.id)
       if (openDeal?.url) {
         // Winner already linked it — return that link.
         return NextResponse.json({ success: true, payment_link: openDeal.url })
       }
       if (openDeal) {
-        // Deal exists but was never linked (prior outage) — resume its on-enter
-        // actions instead of permanently 500-ing this contact+product.
+        // Order exists but was never linked (prior outage) — resume its on-enter
+        // actions instead of permanently 500-ing this contact+form.
         return resumeOpenDeal(supabase, openDeal.id, answers)
       }
     }
     return fail('Could not create your enrollment. Please try again.', 500)
   }
   const dealId = (dealRow as Pick<Deal, 'id'>).id
+
+  // 6e-ii. Snapshot the order's line items. These carry the per-product
+  // name/price/GST captured above so the order is immutable against later
+  // catalogue edits.
+  const { error: itemsError } = await supabase
+    .from('deal_items')
+    .insert(items.map((it) => ({ ...it, deal_id: dealId })))
+  if (itemsError) {
+    // The deal row was created but its line items failed to persist. Best-effort
+    // delete the just-created (itemless) deal before returning 500: left in
+    // place it would occupy the `deals_open_order_dedupe (contact_id, form_id)`
+    // slot as an OPEN order, and a resubmission would route through
+    // `resumeOpenDeal`, which only re-runs stage actions and never backfills the
+    // missing `deal_items` — leaving a permanent order carrying aggregated
+    // totals but zero lines. Deleting it frees the slot so the next submission
+    // starts clean.
+    await supabase.from('deals').delete().eq('id', dealId)
+    return fail('Could not record your order items. Please try again.', 500)
+  }
 
   // 6f. Opening stage event (audit trail; system actor) + `created` timeline
   // entry, mirroring the manual create-deal path.
@@ -413,13 +457,12 @@ export async function POST(req: Request): Promise<Response> {
   await emitEvent('submission.created', {
     leadId,
     contactId: contact.id,
-    productId: product.id,
     formId: form.id,
   })
   await emitEvent('deal.created', {
     dealId,
     contactId: contact.id,
-    productId: product.id,
+    itemCount: items.length,
   })
 
   // 7–9. Run the entry stage's on-enter actions (which, for the seeded Payment
@@ -431,16 +474,18 @@ export async function POST(req: Request): Promise<Response> {
 /*
  * ENV-PENDING — end-to-end manual test (needs live Supabase + Razorpay +
  * Altcha + AiSensy):
- *   1. Publish a form bound to a product; open `/f/<slug>`, let the Altcha
- *      widget solve, and submit. Expect a redirect to the Razorpay hosted
- *      payment link.
- *   2. In Supabase: a `leads` row (with raw_payload/utm/state/product_id), a
+ *   1. Publish a multi-product form; open `/f/<slug>`, select 2 offered items,
+ *      let the Altcha widget solve, and submit. Expect a redirect to ONE
+ *      Razorpay hosted payment link for the combined total.
+ *   2. In Supabase: a `leads` row (raw_payload/utm/state; product_id null), a
  *      `contacts` row (consent + consent_timestamp set iff the consent field was
- *      "yes"), and a `deals` row with payment_status='link_sent' and both
- *      razorpay_payment_link_id + _url populated, GST split matching §7.
+ *      "yes"), ONE `deals` row (product_id null, form_id set, payment_status=
+ *      'link_sent', both razorpay_payment_link_id + _url populated, aggregated
+ *      GST split matching §7), and TWO `deal_items` rows with snapshotted
+ *      names/prices/GST.
  *   3. A `notification_log` row for template 'enrollment_link'.
- *   4. Resubmit the same WhatsApp + product before paying → the SAME payment
- *      link is returned (idempotency), no duplicate deal.
+ *   4. Resubmit the same WhatsApp + form before paying → the SAME payment link
+ *      is returned (idempotency), no duplicate order.
  *   5. Omit/tamper the captcha token → 400; exceed 5 submits/min from one IP →
- *      429.
+ *      429; submit with no items selected → 400.
  */

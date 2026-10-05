@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest'
 import type { User } from '@supabase/supabase-js'
 
 /**
@@ -20,10 +20,18 @@ const dealUpdateEqMock = vi.fn()
 const dealUpdateMock = vi.fn<
   (payload: Record<string, unknown>) => { eq: typeof dealUpdateEqMock }
 >(() => ({ eq: dealUpdateEqMock }))
-// stages: select→in (resolve names).
+// stages: select→in (resolve names) and select→eq→maybeSingle (default stage).
 const stagesInMock = vi.fn()
+const defaultStageMaybeSingleMock = vi.fn()
 // deal_stage_events: insert.
 const eventInsertMock = vi.fn()
+// products: select('*')→eq→maybeSingle (resolve product for GST).
+const productMaybeSingleMock = vi.fn()
+// deals: insert→select→single (createDeal) + delete chain is unused here.
+const dealInsertSingleMock = vi.fn()
+// deal_items: insert (snapshot one order line) + delete→eq (replace on edit).
+const dealItemsInsertMock = vi.fn()
+const dealItemsDeleteEqMock = vi.fn()
 
 // A full-permission Admin role (deals scope 'all'), returned by the profiles
 // lookup that `requirePermission` → `getCurrentUserWithRole` now performs. Scope
@@ -52,12 +60,26 @@ function dealsTable() {
   return {
     select: () => ({ eq: () => ({ maybeSingle: dealMaybeSingleMock }) }),
     update: dealUpdateMock,
+    insert: () => ({ select: () => ({ single: dealInsertSingleMock }) }),
   }
 }
 
 const fromMock = vi.fn((table: string) => {
   if (table === 'deals') return dealsTable()
-  if (table === 'stages') return { select: () => ({ in: stagesInMock }) }
+  if (table === 'stages')
+    return {
+      select: () => ({
+        in: stagesInMock,
+        eq: () => ({ maybeSingle: defaultStageMaybeSingleMock }),
+      }),
+    }
+  if (table === 'products')
+    return { select: () => ({ eq: () => ({ maybeSingle: productMaybeSingleMock }) }) }
+  if (table === 'deal_items')
+    return {
+      insert: dealItemsInsertMock,
+      delete: () => ({ eq: dealItemsDeleteEqMock }),
+    }
   if (table === 'deal_stage_events') return { insert: eventInsertMock }
   if (table === 'profiles')
     return { select: () => ({ eq: () => ({ maybeSingle: profileMaybeSingleMock }) }) }
@@ -105,9 +127,19 @@ vi.mock('next/cache', () => ({
   revalidatePath: (...args: unknown[]) => revalidatePathMock(...args),
 }))
 
-import { changeDealStage } from './actions'
+// createDeal validates deal custom fields against the active defs. No defs are
+// relevant to these tests, so resolve an empty set (validateCustomFields then
+// passes trivially).
+vi.mock('@/features/crm/custom-fields/queries', () => ({
+  getActiveCustomFieldDefs: vi.fn(async () => []),
+}))
+
+import { changeDealStage, createDeal, updateDeal } from './actions'
 
 const USER = { id: 'user-1', email: 'admin@moladus.test' } as unknown as User
+
+const CONTACT_ID = '11111111-1111-4111-8111-111111111111'
+const PRODUCT_ID = '22222222-2222-4222-8222-222222222222'
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -125,6 +157,30 @@ beforeEach(() => {
   })
   dealUpdateEqMock.mockResolvedValue({ error: null })
   eventInsertMock.mockResolvedValue({ error: null })
+  // createDeal success defaults.
+  productMaybeSingleMock.mockResolvedValue({
+    data: {
+      id: PRODUCT_ID,
+      name: 'Molecule Starter',
+      base_price: 1000,
+      currency: 'INR',
+      taxable: true,
+      gst_percentage: 18,
+      price_mode: 'exclusive',
+      active: true,
+      is_bundle: false,
+      bundle_components: null,
+      custom_fields: {},
+    },
+    error: null,
+  })
+  defaultStageMaybeSingleMock.mockResolvedValue({
+    data: { id: 'stage-default' },
+    error: null,
+  })
+  dealInsertSingleMock.mockResolvedValue({ data: { id: 'deal-new' }, error: null })
+  dealItemsInsertMock.mockResolvedValue({ error: null })
+  dealItemsDeleteEqMock.mockResolvedValue({ error: null })
   // Default: the caller resolves to the full-permission Admin role.
   profileMaybeSingleMock.mockResolvedValue({
     data: { role_id: ADMIN_ROLE.id, role: ADMIN_ROLE },
@@ -208,5 +264,132 @@ describe('changeDealStage (plan Task 4.1)', () => {
     expect(result.ok).toBe(false)
     expect(dealUpdateMock).not.toHaveBeenCalled()
     expect(runStageActionsMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('createDeal (plan Task 8.4 — single-line order)', () => {
+  // Make the GST split deterministic: match the place-of-supply to the business
+  // home state so the intra-state (CGST+SGST) branch is taken.
+  const originalBusinessState = process.env.BUSINESS_STATE
+  beforeEach(() => {
+    process.env.BUSINESS_STATE = 'Karnataka'
+  })
+  afterAll(() => {
+    process.env.BUSINESS_STATE = originalBusinessState
+  })
+
+  it('writes exactly one deal_items row snapshotting the chosen product', async () => {
+    getCurrentUserMock.mockResolvedValue(USER)
+
+    const result = await createDeal({
+      contact_id: CONTACT_ID,
+      product_id: PRODUCT_ID,
+      place_of_supply: 'Karnataka',
+      create_payment_link: false,
+    })
+
+    expect(result.ok).toBe(true)
+
+    // Exactly one order line, snapshotting the product name + base price, linked
+    // to the freshly-inserted deal, with the per-line GST mirroring the deal.
+    expect(dealItemsInsertMock).toHaveBeenCalledTimes(1)
+    const line = dealItemsInsertMock.mock.calls[0][0]
+    expect(line).toMatchObject({
+      deal_id: 'deal-new',
+      product_id: PRODUCT_ID,
+      product_name: 'Molecule Starter',
+      base_price: 1000,
+    })
+    // GST snapshot present (18% intra-state → CGST+SGST, no IGST).
+    expect(line.taxable_amount).toBe(1000)
+    expect(line.cgst).toBeGreaterThan(0)
+    expect(line.sgst).toBeGreaterThan(0)
+    expect(line.igst).toBe(0)
+    expect(line.total_amount).toBeGreaterThan(line.base_price)
+  })
+
+  it('fails the create when the order line cannot be written', async () => {
+    getCurrentUserMock.mockResolvedValue(USER)
+    dealItemsInsertMock.mockResolvedValue({ error: { message: 'insert failed' } })
+
+    const result = await createDeal({
+      contact_id: CONTACT_ID,
+      product_id: PRODUCT_ID,
+      place_of_supply: 'Karnataka',
+      create_payment_link: false,
+    })
+
+    expect(result.ok).toBe(false)
+  })
+})
+
+describe('updateDeal — order-line replacement gating (WS8 SHOULD_FIX)', () => {
+  beforeEach(() => {
+    getCurrentUserMock.mockResolvedValue(USER)
+    dealUpdateEqMock.mockResolvedValue({ error: null })
+  })
+
+  it('refuses to edit a form-created order (previous product_id null) and writes nothing', async () => {
+    // A form-ingested multi-line order has deals.product_id = null and N
+    // snapshotted lines. The single-item manual form can't represent it, and
+    // recomputing GST from one picked product would overwrite the deal's
+    // aggregate money columns while deal_items still holds N lines. updateDeal
+    // must bail BEFORE the deals UPDATE and touch no table.
+    dealMaybeSingleMock.mockResolvedValue({
+      data: { custom_fields: {}, product_id: null },
+      error: null,
+    })
+
+    const result = await updateDeal('deal-form', {
+      contact_id: CONTACT_ID,
+      product_id: PRODUCT_ID,
+      place_of_supply: 'Karnataka',
+    })
+
+    expect(result.ok).toBe(false)
+    // No aggregate overwrite, and the snapshotted lines are left intact.
+    expect(dealUpdateMock).not.toHaveBeenCalled()
+    expect(dealItemsDeleteEqMock).not.toHaveBeenCalled()
+    expect(dealItemsInsertMock).not.toHaveBeenCalled()
+  })
+
+  it('replaces the single line for a manual deal when the product changes', async () => {
+    // A manual single-item deal always has a product_id; changing it replaces the
+    // one snapshotted line.
+    dealMaybeSingleMock.mockResolvedValue({
+      data: { custom_fields: {}, product_id: 'old-product-id' },
+      error: null,
+    })
+
+    const result = await updateDeal('deal-manual', {
+      contact_id: CONTACT_ID,
+      product_id: PRODUCT_ID,
+      place_of_supply: 'Karnataka',
+    })
+
+    expect(result.ok).toBe(true)
+    expect(dealItemsDeleteEqMock).toHaveBeenCalledWith('deal_id', 'deal-manual')
+    expect(dealItemsInsertMock).toHaveBeenCalledTimes(1)
+    expect(dealItemsInsertMock.mock.calls[0][0]).toMatchObject({
+      deal_id: 'deal-manual',
+      product_id: PRODUCT_ID,
+    })
+  })
+
+  it('leaves lines untouched for a manual deal when the product is unchanged', async () => {
+    dealMaybeSingleMock.mockResolvedValue({
+      data: { custom_fields: {}, product_id: PRODUCT_ID },
+      error: null,
+    })
+
+    const result = await updateDeal('deal-manual', {
+      contact_id: CONTACT_ID,
+      product_id: PRODUCT_ID,
+      place_of_supply: 'Karnataka',
+    })
+
+    expect(result.ok).toBe(true)
+    expect(dealItemsDeleteEqMock).not.toHaveBeenCalled()
+    expect(dealItemsInsertMock).not.toHaveBeenCalled()
   })
 })

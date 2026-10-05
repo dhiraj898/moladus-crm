@@ -1,6 +1,6 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
-import { getProduct } from '@/features/products/actions'
+import { getProduct, listProducts } from '@/features/products/actions'
 import ProductForm from '@/features/products/ProductForm'
 import { getActiveCustomFieldDefs } from '@/features/crm/custom-fields/queries'
 
@@ -17,7 +17,10 @@ export default async function EditProductPage({
 
   if (!product) notFound()
 
-  const customFieldDefs = await getActiveCustomFieldDefs('product')
+  const [customFieldDefs, products] = await Promise.all([
+    getActiveCustomFieldDefs('product'),
+    listProducts(),
+  ])
 
   return (
     <div className="mx-auto max-w-[960px]">
@@ -36,6 +39,7 @@ export default async function EditProductPage({
       <ProductForm
         mode="edit"
         product={product}
+        products={products}
         customFieldDefs={customFieldDefs}
       />
     </div>

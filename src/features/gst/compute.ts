@@ -65,3 +65,24 @@ export function computeGST(product: Product, customerState: string): GSTBreakdow
     ? { cgst: round2(taxAmount / 2), sgst: round2(taxAmount / 2), igst: 0, taxableAmount: base, total }
     : { cgst: 0, sgst: 0, igst: taxAmount, taxableAmount: base, total }
 }
+
+/** Sum per-line GST breakdowns into an order-level aggregate (paise-rounded). */
+export function aggregateGST(lines: GSTBreakdown[]): GSTBreakdown {
+  const acc = lines.reduce(
+    (a, l) => ({
+      cgst: a.cgst + l.cgst,
+      sgst: a.sgst + l.sgst,
+      igst: a.igst + l.igst,
+      taxableAmount: a.taxableAmount + l.taxableAmount,
+      total: a.total + l.total,
+    }),
+    { cgst: 0, sgst: 0, igst: 0, taxableAmount: 0, total: 0 }
+  )
+  return {
+    cgst: round2(acc.cgst),
+    sgst: round2(acc.sgst),
+    igst: round2(acc.igst),
+    taxableAmount: round2(acc.taxableAmount),
+    total: round2(acc.total),
+  }
+}

@@ -1,5 +1,5 @@
 import Link from 'next/link'
-import { notFound } from 'next/navigation'
+import { notFound, redirect } from 'next/navigation'
 import { listProducts } from '@/features/products/actions'
 import {
   getDealTimeline,
@@ -26,6 +26,15 @@ export default async function EditDealPage({
   const { id } = await params
   const timeline = await getDealTimeline(id, ctx)
   if (!timeline) notFound()
+
+  // Form-ingested multi-line orders (product_id null, N snapshotted deal_items
+  // lines) are not editable in the single-item manual form: sending one through
+  // `updateDeal` would collapse the deal's aggregate totals to the one picked
+  // product while the N lines remain, so `updateDeal` refuses it server-side.
+  // Bounce back to the read-only detail view so the form is never shown.
+  if (timeline.deal.product_id === null) {
+    redirect(`/admin/interest/${id}`)
+  }
 
   const [products, contacts, leads, customFieldDefs] = await Promise.all([
     listProducts(),

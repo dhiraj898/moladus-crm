@@ -349,6 +349,24 @@ export async function createDeal(
   }
   const dealId = (dealRow as { id: string }).id
 
+  // Snapshot the chosen product as a single order line. Manual single-item deals
+  // keep `deals.product_id`; the line mirrors the deal totals (same `gst`), so
+  // the deal-detail breakdown renders uniformly with multi-line ingested orders.
+  const { error: itemError } = await supabase.from('deal_items').insert({
+    deal_id: dealId,
+    product_id,
+    product_name: product.name,
+    base_price: product.base_price,
+    taxable_amount: gst.taxableAmount,
+    cgst: gst.cgst,
+    sgst: gst.sgst,
+    igst: gst.igst,
+    total_amount: gst.total,
+  })
+  if (itemError) {
+    return { ok: false, error: `Failed to create deal: ${itemError.message}` }
+  }
+
   // Opening stage event + created activity (audit + timeline).
   await supabase.from('deal_stage_events').insert({
     deal_id: dealId,
@@ -484,9 +502,26 @@ export async function updateDeal(
   // existing custom_fields, then spread the freshly-validated values on top.
   const { data: existingDeal } = await supabase
     .from('deals')
-    .select('custom_fields')
+    .select('custom_fields, product_id')
     .eq('id', id)
     .maybeSingle()
+  if (!existingDeal) return { ok: false, error: 'Deal not found.' }
+  const previousProductId =
+    (existingDeal as { product_id: string | null }).product_id ?? null
+
+  // A form-ingested multi-line order has `deals.product_id = null` and N
+  // snapshotted `deal_items` lines, whereas the manual DealForm is single-item
+  // by design (its product select is required). Editing a form order here would
+  // recompute GST from the ONE picked product and overwrite the deal's
+  // aggregate money columns (base/taxable/cgst/sgst/igst/total), while
+  // `deal_items` still holds N lines — leaving the per-line breakdown and the
+  // aggregate totals row irreconcilable. Such orders are not manually editable:
+  // refuse BEFORE the `deals` UPDATE so no divergence can be written. The edit
+  // page also redirects these back to detail, so this is the server-side guard.
+  if (previousProductId === null) {
+    return { ok: false, error: "Multi-product orders can't be edited here." }
+  }
+
   const activeKeys = new Set(defs.map((d) => d.key))
   const preserved = Object.fromEntries(
     Object.entries(
@@ -532,6 +567,29 @@ export async function updateDeal(
       return { ok: false, error: OPEN_DEAL_EXISTS }
     }
     return { ok: false, error: `Failed to update deal: ${updateError.message}` }
+  }
+
+  // When the product changed, replace this deal's single order line with a fresh
+  // snapshot (price + per-line GST mirroring the new deal totals). Leaves lines
+  // untouched when the product is unchanged. Form orders (previousProductId
+  // null) were already rejected above, so this only ever rewrites the single
+  // line of a manual single-item deal.
+  if (product_id !== previousProductId) {
+    await supabase.from('deal_items').delete().eq('deal_id', id)
+    const { error: itemError } = await supabase.from('deal_items').insert({
+      deal_id: id,
+      product_id,
+      product_name: product.name,
+      base_price: product.base_price,
+      taxable_amount: gst.taxableAmount,
+      cgst: gst.cgst,
+      sgst: gst.sgst,
+      igst: gst.igst,
+      total_amount: gst.total,
+    })
+    if (itemError) {
+      return { ok: false, error: `Failed to update deal: ${itemError.message}` }
+    }
   }
 
   await logActivity('deal', id, 'edited', { actorId: ctx.user.id })

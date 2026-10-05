@@ -1,7 +1,7 @@
 import { notFound } from 'next/navigation'
 import type { Metadata } from 'next'
 import { getPublishedFormBySlug } from '@/features/forms/queries'
-import { estimatePrice, formatMoney } from '@/features/form-engine/estimate'
+import { estimatePrice } from '@/features/form-engine/estimate'
 import FormRunner from './FormRunner'
 
 /**
@@ -48,35 +48,33 @@ export default async function PublicFormPage({
   const loaded = await getPublishedFormBySlug(slug)
 
   if (!loaded) notFound()
-  const { form, fields, product } = loaded
+  const { form, fields } = loaded
 
-  const estimate = product && !form.hide_price ? estimatePrice(product) : null
+  // Per-item estimates for the selection cart live in the FormRunner now; the
+  // page only snapshots a display-only estimate per offered product (never
+  // hardcoded — rate/mode read from each product row). Suppressed when the form
+  // opts out of showing prices (`hide_price`).
+  const offerings = loaded.products.map((p) => ({
+    id: p.id,
+    name: p.name,
+    description: p.description,
+    is_bundle: p.is_bundle,
+    estimate: form.hide_price ? null : estimatePrice(p),
+  }))
 
   return (
     <main className="flex min-h-screen flex-col">
-      {/* Persistent product header + live cost estimate. */}
+      {/* Neutral form header — per-item prices now live in the selection UI. */}
       <header className="border-b border-line bg-surface/60 px-6 py-4 backdrop-blur">
-        <div className="mx-auto flex max-w-[720px] items-center justify-between gap-4">
+        <div className="mx-auto flex max-w-[720px] items-center gap-4">
           <div className="min-w-0">
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-accent">
               Enrollment
             </p>
             <h1 className="mt-0.5 truncate text-base font-bold tracking-[-0.01em]">
-              {product?.name ?? form.name}
+              {form.name}
             </h1>
           </div>
-          {estimate ? (
-            <div className="flex-shrink-0 text-right">
-              <div className="tabular-nums text-lg font-extrabold tracking-[-0.01em]">
-                {formatMoney(estimate.total, estimate.currency)}
-              </div>
-              <div className="text-xs text-dim">
-                {estimate.gstRate > 0
-                  ? `incl. ${estimate.gstRate}% GST`
-                  : 'no GST'}
-              </div>
-            </div>
-          ) : null}
         </div>
       </header>
 
@@ -87,6 +85,8 @@ export default async function PublicFormPage({
         submitLabel={form.submit_label ?? 'Submit'}
         captchaEnabled={CAPTCHA_ENABLED}
         ingestUrl={INGEST_URL}
+        products={offerings}
+        hidePrice={form.hide_price}
       />
     </main>
   )

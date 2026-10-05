@@ -1,9 +1,13 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
-import { getFormWithFields } from '@/features/forms/queries'
+import {
+  getFormWithFields,
+  listFormProductIds,
+} from '@/features/forms/queries'
 import { listProducts } from '@/features/products/actions'
 import type { Product } from '@/lib/supabase/types'
 import FormMetaForm from '@/features/forms/FormMetaForm'
+import FormProductsPicker from '@/features/forms/FormProductsPicker'
 import FieldConfigurator from '@/features/forms/FieldConfigurator'
 import CopyLinkButton from '@/features/forms/CopyLinkButton'
 import EmbedSnippet from '@/features/forms/EmbedSnippet'
@@ -23,21 +27,22 @@ export default async function FormBuilderPage({
   params: Promise<{ id: string }>
 }) {
   const { id } = await params
-  const [loaded, products] = await Promise.all([
+  const [loaded, products, offeredIds] = await Promise.all([
     getFormWithFields(id),
     listProducts(),
+    listFormProductIds(id),
   ])
 
   if (!loaded) notFound()
-  const { form, fields, product } = loaded
+  const { form, fields, products: offered } = loaded
 
-  // Picker offers active products, plus the currently-bound product even if it
-  // has since been deactivated, so the selection is never silently lost.
+  // Picker offers active products, plus any currently-offered product that has
+  // since been deactivated, so the selection is never silently lost.
   const activeProducts = products.filter((p) => p.active !== false)
-  const pickerProducts: Product[] =
-    product && !activeProducts.some((p) => p.id === product.id)
-      ? [product, ...activeProducts]
-      : activeProducts
+  const offeredInactive = offered.filter(
+    (p) => p.active === false && !activeProducts.some((a) => a.id === p.id)
+  )
+  const pickerProducts: Product[] = [...offeredInactive, ...activeProducts]
 
   return (
     <div className="mx-auto max-w-[960px]">
@@ -61,7 +66,23 @@ export default async function FormBuilderPage({
 
       <section className="mb-12">
         <h2 className="mb-4 text-lg font-bold tracking-[-0.01em]">Details</h2>
-        <FormMetaForm mode="edit" form={form} products={pickerProducts} />
+        <FormMetaForm mode="edit" form={form} />
+      </section>
+
+      <section className="mb-12">
+        <h2 className="mb-2 text-lg font-bold tracking-[-0.01em]">
+          Products offered
+        </h2>
+        <p className="mb-4 max-w-[640px] text-sm text-dim">
+          Choose which products and bundles this form offers. Customers pick
+          from these on the public form; the order here is the order they see.
+          At least one is required to publish.
+        </p>
+        <FormProductsPicker
+          formId={form.id}
+          products={pickerProducts}
+          initialSelectedIds={offeredIds}
+        />
       </section>
 
       <section className="mb-12">

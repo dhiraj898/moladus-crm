@@ -4,7 +4,8 @@ import { getServiceClient } from '@/lib/supabase/server'
 import { createPaymentLink } from '@/features/razorpay/paymentLink'
 import { sendWhatsAppTemplate } from '@/features/aisensy/send'
 import { logActivity } from '@/features/crm/activities/service'
-import type { Contact, Deal, Product, StageAction } from '@/lib/supabase/types'
+import { loadLineSummary } from './orderSummary'
+import type { Contact, Deal, StageAction } from '@/lib/supabase/types'
 
 /**
  * On-enter stage action runner (design §5, plan WS3 Task 3.1).
@@ -106,19 +107,6 @@ async function loadContact(
   return (data as Pick<Contact, 'name' | 'email' | 'whatsapp_number'> | null) ?? null
 }
 
-async function loadProduct(
-  productId: string | null
-): Promise<Pick<Product, 'id' | 'name'> | null> {
-  if (!productId) return null
-  const supabase = getServiceClient()
-  const { data } = await supabase
-    .from('products')
-    .select('id, name')
-    .eq('id', productId)
-    .maybeSingle()
-  return (data as Pick<Product, 'id' | 'name'> | null) ?? null
-}
-
 /**
  * Resolve the payment-link callback URL. In v1 the link redirected to the
  * submitting form's thank-you page (`/f/{slug}/thank-you`); we recover the slug
@@ -169,7 +157,6 @@ async function runCreatePaymentLink(dealId: string): Promise<void> {
   if (deal.razorpay_payment_link_url) return
 
   const contact = await loadContact(deal.contact_id)
-  const product = await loadProduct(deal.product_id)
   if (!contact) {
     await logActivity('deal', dealId, 'payment', {
       body: 'On-enter create_payment_link skipped: contact not found.',
@@ -177,19 +164,18 @@ async function runCreatePaymentLink(dealId: string): Promise<void> {
     })
     return
   }
-  if (!product) {
-    await logActivity('deal', dealId, 'payment', {
-      body: 'On-enter create_payment_link skipped: product not found.',
-      metadata: { status: 'action_failed', action_type: 'create_payment_link' },
-    })
-    return
-  }
+
+  // Order-level: a multi-line order has `product_id` null (one row per
+  // `deal_items`). The link description summarises the line(s); legacy
+  // single-product deals keep the single product's name. The amount is the
+  // deal's GST-inclusive `total_amount` either way.
+  const description = await loadLineSummary(dealId, deal.product_id)
 
   const callbackUrl = await resolveCallbackUrl(deal.lead_id)
 
   const link = await createPaymentLink({
     amountPaise: Math.round(Number(deal.total_amount) * 100),
-    description: product.name,
+    description,
     customer: {
       name: contact.name ?? 'Student',
       email: contact.email ?? undefined,
@@ -197,7 +183,7 @@ async function runCreatePaymentLink(dealId: string): Promise<void> {
     },
     callbackUrl,
     referenceId: dealId,
-    notes: { deal_id: dealId, product_id: product.id },
+    notes: { deal_id: dealId, product_id: deal.product_id ?? '' },
   })
 
   await supabase
@@ -243,10 +229,9 @@ async function runSendWhatsApp(dealId: string, action: StageAction): Promise<voi
     return
   }
 
-  const product = await loadProduct(deal?.product_id ?? null)
   const name = contact.name ?? 'there'
   const paymentLink = deal?.razorpay_payment_link_url ?? ''
-  const productName = product?.name ?? ''
+  const productName = await loadLineSummary(dealId, deal?.product_id ?? null)
 
   // Link-dependent templates carry the payment link as a param. If the link is
   // missing (e.g. an earlier `create_payment_link` action failed on a Razorpay
