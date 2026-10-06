@@ -62,3 +62,14 @@ export async function createPaymentLink(
 
   return { id: link.id, short_url: link.short_url }
 }
+
+/**
+ * Cancel a Razorpay payment link by id. Used when an open order's selection
+ * changes before payment: the old link (for the old amount) must be voided so a
+ * customer cannot still pay the stale total. Best-effort — callers wrap this and
+ * never let a cancel failure block replacing the order.
+ */
+export async function cancelPaymentLink(linkId: string): Promise<void> {
+  const client = await getRazorpayClient()
+  await client.paymentLink.cancel(linkId)
+}

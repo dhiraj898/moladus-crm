@@ -27,6 +27,9 @@ const db: {
   dealId: string
   itemsError: unknown
   dealLinkUrl: string | null
+  dealLinkId: string | null
+  existingItems: { product_id: string }[] | null
+  deletes: string[]
   inserts: CapturedInserts
 } = {
   existingContact: null,
@@ -36,6 +39,9 @@ const db: {
   dealId: 'deal-1',
   itemsError: null,
   dealLinkUrl: 'https://rzp.io/l/combined',
+  dealLinkId: 'plink_old',
+  existingItems: null,
+  deletes: [],
   inserts: {},
 }
 
@@ -58,12 +64,25 @@ function makeBuilder(table: string) {
     op = 'update'
     return b
   }
+  b.delete = () => {
+    op = 'delete'
+    db.deletes.push(table)
+    return b
+  }
   b.eq = () => b
   b.not = () => b
   b.maybeSingle = () => {
     if (table === 'contacts') return Promise.resolve({ data: db.existingContact, error: null })
     if (table === 'deals')
-      return Promise.resolve({ data: { razorpay_payment_link_url: db.dealLinkUrl }, error: null })
+      return Promise.resolve({
+        data: {
+          id: db.dealId,
+          razorpay_payment_link_url: db.dealLinkUrl,
+          razorpay_payment_link_id: db.dealLinkId,
+          stage_id: 'stage-1',
+        },
+        error: null,
+      })
     return Promise.resolve({ data: null, error: null })
   }
   b.single = () => {
@@ -77,10 +96,10 @@ function makeBuilder(table: string) {
     return Promise.resolve({ data: null, error: null })
   }
   b.then = (res: (v: unknown) => unknown, rej?: (e: unknown) => unknown) => {
-    const result =
-      op === 'insert' && table === 'deal_items'
-        ? { error: db.itemsError }
-        : { data: null, error: null }
+    let result: unknown = { data: null, error: null }
+    if (op === 'insert' && table === 'deal_items') result = { error: db.itemsError }
+    else if (op === 'select' && table === 'deal_items')
+      result = { data: db.existingItems, error: null }
     return Promise.resolve(result).then(res, rej)
   }
   return b
@@ -132,6 +151,11 @@ vi.mock('@/features/webhooks/emit', () => ({
   emitEvent: (...args: unknown[]) => emitEventMock(...args),
 }))
 
+const cancelLinkMock = vi.fn(async (..._args: unknown[]) => {})
+vi.mock('@/features/razorpay/paymentLink', () => ({
+  cancelPaymentLink: (...args: unknown[]) => cancelLinkMock(...args),
+}))
+
 import { POST } from './route'
 
 /** Minimal non-taxable product (total = base_price; no GST env dependency). */
@@ -168,6 +192,9 @@ beforeEach(() => {
   db.dealInsertError = null
   db.itemsError = null
   db.dealLinkUrl = 'https://rzp.io/l/combined'
+  db.dealLinkId = 'plink_old'
+  db.existingItems = null
+  db.deletes = []
   db.inserts = {}
   loadedMock.mockResolvedValue({
     form: { id: 'form-1', status: 'published' },
@@ -228,6 +255,41 @@ describe('POST /api/ingest — multi-line order creation (WS6)', () => {
     expect(items).toHaveLength(1)
     expect(items[0].product_name).toBe('Course A')
     expect((db.inserts.deals[0] as Record<string, unknown>).total_amount).toBe(1000)
+  })
+
+  it('resubmit with the SAME selection returns the existing order link (no new deal, no cancel)', async () => {
+    db.existingContact = { id: 'contact-1' }
+    db.existingItems = [{ product_id: 'p1' }, { product_id: 'p2' }]
+    const res = await POST(
+      makeReq({ form_id: 'form-1', answers: {}, selected_products: ['p1', 'p2'] })
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { payment_link: string | null }
+    expect(json.payment_link).toBe('https://rzp.io/l/combined')
+    // Idempotent: no replacement — nothing inserted, nothing cancelled/deleted.
+    expect(db.inserts.deals).toBeUndefined()
+    expect(db.inserts.deal_items).toBeUndefined()
+    expect(cancelLinkMock).not.toHaveBeenCalled()
+    expect(db.deletes).not.toContain('deal_items')
+  })
+
+  it('resubmit with a CHANGED selection replaces the order: cancels old link + swaps items', async () => {
+    db.existingContact = { id: 'contact-1' }
+    db.existingItems = [{ product_id: 'p1' }] // old order had only Course A
+    const res = await POST(
+      makeReq({ form_id: 'form-1', answers: {}, selected_products: ['p1', 'p2'] })
+    )
+    expect(res.status).toBe(200)
+    // Old Razorpay link cancelled so the stale total can't still be paid.
+    expect(cancelLinkMock).toHaveBeenCalledWith('plink_old')
+    // Old line items deleted, new ones inserted for the SAME deal.
+    expect(db.deletes).toContain('deal_items')
+    expect(db.inserts.deal_items).toHaveLength(1)
+    const items = db.inserts.deal_items[0] as Array<Record<string, unknown>>
+    expect(items.map((it) => it.product_name)).toEqual(['Course A', 'Course B'])
+    expect(items.every((it) => it.deal_id === 'deal-1')).toBe(true)
+    // No brand-new order row created — the existing one is reused.
+    expect(db.inserts.deals).toBeUndefined()
   })
 
   it('an inactive offered product is excluded; all-invalid selection → 400', async () => {
