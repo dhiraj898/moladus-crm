@@ -7,14 +7,17 @@ import type { ModuleKey } from '@/lib/supabase/types'
 /**
  * Primary sidebar nav (plan Task 6.2). Each item maps to the module whose
  * `view` capability gates it; Settings is shown when the role can view either
- * `settings` or `automation` (automation lives under Settings). The `allowed`
- * map is computed server-side in `AdminLayout` from the resolved permissions.
+ * `settings` or `automation` (automation lives under Settings). Dashboard is
+ * special-cased (module `null`) so it is always visible — every admin may view
+ * it, with no module guard. The `allowed` map is computed server-side in
+ * `AdminLayout` from the resolved permissions.
  */
 const NAV_ITEMS: {
   href: string
   label: string
-  module: ModuleKey
+  module: ModuleKey | null
 }[] = [
+  { href: '/admin/dashboard', label: 'Dashboard', module: null },
   { href: '/admin/products', label: 'Products', module: 'products' },
   { href: '/admin/forms', label: 'Forms', module: 'forms' },
   { href: '/admin/leads', label: 'Leads', module: 'leads' },
@@ -31,9 +34,11 @@ export default function AdminNav({
   const pathname = usePathname()
 
   const items = NAV_ITEMS.filter((item) =>
-    item.module === 'settings'
-      ? allowed.settings || allowed.automation
-      : allowed[item.module]
+    item.module === null
+      ? true // Dashboard: always visible, no module guard
+      : item.module === 'settings'
+        ? allowed.settings || allowed.automation
+        : allowed[item.module]
   )
 
   return (
