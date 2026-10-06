@@ -458,7 +458,7 @@ export interface AssignmentState {
 /** integration_settings.key — the managed provider secret keys. */
 export type SecretKey =
   | 'RAZORPAY_KEY_ID' | 'RAZORPAY_KEY_SECRET' | 'RAZORPAY_WEBHOOK_SECRET'
-  | 'AISENSY_API_KEY' | 'AISENSY_WEBHOOK_SECRET'
+  | 'AISENSY_API_KEY' | 'AISENSY_WEBHOOK_SECRET' | 'AISENSY_USER_NAME'
 
 export interface IntegrationSetting {
   key: SecretKey

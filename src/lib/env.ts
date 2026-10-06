@@ -14,6 +14,7 @@ const schema = z.object({
   RAZORPAY_WEBHOOK_SECRET: z.string().min(1).optional(),
   AISENSY_API_KEY: z.string().min(1).optional(),
   AISENSY_WEBHOOK_SECRET: z.string().min(1).optional(),
+  AISENSY_USER_NAME: z.string().min(1).optional(),
   BUSINESS_STATE: z.string().min(1),
   NEXT_PUBLIC_APP_URL: z.string().url(),
   CRON_SECRET: z.string().min(1),

@@ -44,6 +44,12 @@ async function sendTemplate(
     if (!apiKey) {
       return { ok: false, error: 'AiSensy API key not configured' }
     }
+    // AiSensy's campaign API REQUIRES `userName` (the account's WhatsApp
+    // display/user name). Omitting it returns 400 "Invalid userName format".
+    const userName = await getSecret('AISENSY_USER_NAME')
+    if (!userName) {
+      return { ok: false, error: 'AiSensy userName not configured' }
+    }
     const res = await fetch(AISENSY_ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -51,6 +57,7 @@ async function sendTemplate(
         apiKey,
         campaignName: template,
         destination: whatsapp,
+        userName,
         templateParams: params,
       }),
     })
