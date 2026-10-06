@@ -8,19 +8,33 @@ export interface OrderLine {
   total_amount: number
 }
 
-/** Max length for a single Razorpay `notes` value (the API rejects long ones). */
-const NOTE_VALUE_MAX = 250
+/**
+ * Max BYTE length for a single Razorpay `notes` value — the API rejects values
+ * longer than 255 bytes. We count UTF-8 bytes (not JS chars) because `₹` and `…`
+ * are multi-byte: a 250-CHAR string can be ~265 bytes and get rejected. A small
+ * margin under 255 keeps us safe.
+ */
+const NOTE_VALUE_MAX_BYTES = 250
+
+/** Byte length of a string as UTF-8 (how Razorpay measures note values). */
+function byteLength(s: string): number {
+  return Buffer.byteLength(s, 'utf8')
+}
 
 /**
  * Format order lines as a semicolon-separated "name ₹total" list for the
- * Razorpay `notes.items` field, e.g. `"A ₹1,180.00; B ₹545.00"`. Truncated with
- * an ellipsis if it would exceed the per-note length cap.
+ * Razorpay `notes.items` field, e.g. `"A ₹1,180.00; B ₹545.00"`. Truncated (by
+ * UTF-8 byte length, with an ellipsis) if it would exceed Razorpay's per-note cap.
  */
 export function formatItemsNote(lines: OrderLine[]): string {
   const s = lines
     .map((l) => `${l.product_name} ${formatMoney(Number(l.total_amount))}`)
     .join('; ')
-  return s.length > NOTE_VALUE_MAX ? `${s.slice(0, NOTE_VALUE_MAX - 1)}…` : s
+  if (byteLength(s) <= NOTE_VALUE_MAX_BYTES) return s
+  // Reserve 3 bytes for the ellipsis; trim chars until the remainder fits.
+  let end = s.length
+  while (end > 0 && byteLength(s.slice(0, end)) > NOTE_VALUE_MAX_BYTES - 3) end--
+  return `${s.slice(0, end)}…`
 }
 
 /** Full detail for the Razorpay payment link (ALL names, no truncation). */
