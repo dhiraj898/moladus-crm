@@ -12,6 +12,17 @@ export default {
     './src/app/**/*.{js,ts,jsx,tsx,mdx}',
     './node_modules/@tremor/**/*.{js,ts,jsx,tsx}',
   ],
+  // Tremor builds chart series classes at runtime (`fill-orange-500`,
+  // `stroke-amber-500`, `bg-blue-500`, ...) via template literals Tailwind's
+  // scanner can't see, so JIT purges them. Safelist the palettes passed to
+  // charts in DashboardViews.tsx. Keep this list in sync with DONUT_COLORS.
+  safelist: [
+    {
+      pattern:
+        /^(bg|text|border|ring|stroke|fill)-(orange|amber|blue|cyan|violet|emerald|rose)-(400|500|600|700|800|900)$/,
+      variants: ['hover', 'ui-selected', 'dark'],
+    },
+  ],
   theme: {
     extend: {
       colors: {
