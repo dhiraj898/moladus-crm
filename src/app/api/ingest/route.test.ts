@@ -5,7 +5,7 @@ import type { Product } from '@/lib/supabase/types'
  * Integration tests for the public submission route's multi-line order creation
  * (plan WS6). The form loader, bindings/validation, service-role client, entry
  * stage resolver, stage on-enter actions, activity log, assignment, webhook
- * emit, rate limiter, and captcha are all mocked so these run without a live DB
+ * emit and rate limiter are all mocked so these run without a live DB
  * or live keys. `buildOrderItems`/`computeGST` are NOT mocked — the aggregated
  * totals and per-line snapshots are exercised for real.
  *
@@ -91,10 +91,6 @@ const emitEventMock = vi.fn(async (..._args: unknown[]) => {})
 
 vi.mock('server-only', () => ({}))
 
-vi.mock('@/lib/env', () => ({
-  getEnv: () => ({ NEXT_PUBLIC_CAPTCHA_ENABLED: 'false' }),
-}))
-
 vi.mock('@/lib/supabase/server', () => ({
   getServiceClient: () => ({ from: (table: string) => makeBuilder(table) }),
 }))
@@ -114,10 +110,6 @@ vi.mock('@/features/ingest/bind', () => ({
 
 vi.mock('@/features/ingest/rateLimit', () => ({
   checkRateLimit: () => true,
-}))
-
-vi.mock('@/features/ingest/captcha', () => ({
-  verifyCaptcha: async () => true,
 }))
 
 vi.mock('@/features/crm/automation/entry', () => ({
