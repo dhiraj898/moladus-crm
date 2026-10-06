@@ -1,11 +1,12 @@
 import { NextResponse } from 'next/server'
 import type { AnswersMap } from '@/features/form-engine/visibility'
-import type { Contact, Deal, Json, Lead } from '@/lib/supabase/types'
+import type { Contact, Deal, Json, Lead, Product } from '@/lib/supabase/types'
 import { getServiceClient } from '@/lib/supabase/server'
 import { getFormWithFields } from '@/features/forms/queries'
 import { applyBindings, validateAnswers } from '@/features/ingest/bind'
 import { checkRateLimit } from '@/features/ingest/rateLimit'
 import { buildOrderItems } from '@/features/crm/deals/orderItems'
+import { cancelPaymentLink } from '@/features/razorpay/paymentLink'
 import { resolveEntryStage } from '@/features/crm/automation/entry'
 import { runStageActions } from '@/features/crm/automation/runActions'
 import { logActivity } from '@/features/crm/activities/service'
@@ -187,6 +188,106 @@ async function findOpenOrder(
   return { id: deal.id, url: deal.razorpay_payment_link_url ?? null }
 }
 
+/**
+ * Handle a resubmission that collides with an existing OPEN order for this
+ * (contact, form).
+ *
+ * - **Selection UNCHANGED** → idempotent: return the existing link, or resume
+ *   the order when a prior attempt left it link-less.
+ * - **Selection CHANGED** → REPLACE the order in place so the new cart wins:
+ *   cancel the stale Razorpay link (the old amount must not stay payable), swap
+ *   the `deal_items` + recomputed totals, reset payment state, and re-run the
+ *   stage's on-enter actions to mint a fresh link + resend. The order keeps its
+ *   id, lead, contact, stage and owner — only its contents + link change.
+ */
+async function handleOpenOrder(
+  supabase: ReturnType<typeof getServiceClient>,
+  openDeal: OpenDeal,
+  selected: Product[],
+  customerState: string,
+  answers: AnswersMap
+): Promise<NextResponse> {
+  const { data: exItems } = await supabase
+    .from('deal_items')
+    .select('product_id')
+    .eq('deal_id', openDeal.id)
+  const existing = new Set(
+    ((exItems ?? []) as { product_id: string }[]).map((r) => r.product_id)
+  )
+  const next = new Set(selected.map((p) => p.id))
+  const unchanged =
+    existing.size === next.size && [...next].every((id) => existing.has(id))
+
+  if (unchanged) {
+    if (openDeal.url) {
+      return NextResponse.json({ success: true, payment_link: openDeal.url })
+    }
+    return resumeOpenDeal(supabase, openDeal.id, answers)
+  }
+
+  // Selection changed → replace the order in place.
+  // 1. Cancel the stale link (best-effort) so the old total can't still be paid.
+  const { data: linkRow } = await supabase
+    .from('deals')
+    .select('razorpay_payment_link_id')
+    .eq('id', openDeal.id)
+    .maybeSingle()
+  const oldLinkId = (linkRow as Pick<Deal, 'razorpay_payment_link_id'> | null)
+    ?.razorpay_payment_link_id
+  if (oldLinkId) {
+    try {
+      await cancelPaymentLink(oldLinkId)
+    } catch {
+      // Best-effort: a cancel failure (already paid/cancelled, Razorpay outage)
+      // must not block replacing the order.
+    }
+  }
+
+  // 2. Recompute + swap the line items.
+  const { items, totals } = buildOrderItems(selected, customerState)
+  await supabase.from('deal_items').delete().eq('deal_id', openDeal.id)
+  const { error: itemsErr } = await supabase
+    .from('deal_items')
+    .insert(items.map((it) => ({ ...it, deal_id: openDeal.id })))
+  if (itemsErr) {
+    return fail('Could not update your order. Please try again.', 500)
+  }
+
+  // 3. Reset totals + clear the link so `create_payment_link` re-mints it.
+  const now = new Date().toISOString()
+  await supabase
+    .from('deals')
+    .update({
+      base_amount: totals.base_amount,
+      taxable_amount: totals.taxable_amount,
+      cgst: totals.cgst,
+      sgst: totals.sgst,
+      igst: totals.igst,
+      total_amount: totals.total_amount,
+      razorpay_payment_link_id: null,
+      razorpay_payment_link_url: null,
+      payment_status: 'pending',
+      updated_at: now,
+    })
+    .eq('id', openDeal.id)
+  await logActivity('deal', openDeal.id, 'created', {
+    body: 'Order updated from a new form selection.',
+  })
+
+  // 4. Re-run the deal's current stage's on-enter actions (mint fresh link +
+  // resend WhatsApp).
+  const { data: stageRow } = await supabase
+    .from('deals')
+    .select('stage_id')
+    .eq('id', openDeal.id)
+    .maybeSingle()
+  const stageId = (stageRow as Pick<Deal, 'stage_id'> | null)?.stage_id ?? null
+  if (!stageId) {
+    return fail('Could not update your order. Please try again.', 500)
+  }
+  return runActionsAndRespond(supabase, openDeal.id, stageId)
+}
+
 export async function POST(req: Request): Promise<Response> {
   // 1. Rate limit (5/min per IP).
   const ip = clientIp(req)
@@ -275,12 +376,16 @@ export async function POST(req: Request): Promise<Response> {
 
   if (existingContact) {
     const openDeal = await findOpenOrder(supabase, existingContact.id, form.id)
-    if (openDeal?.url) {
-      return NextResponse.json({ success: true, payment_link: openDeal.url })
-    }
     if (openDeal) {
-      // Open deal exists but was never linked — resume its on-enter actions.
-      return resumeOpenDeal(supabase, openDeal.id, answers)
+      // Same selection → return/resume the existing order; changed selection →
+      // replace it in place with the new cart (new total + fresh link).
+      return handleOpenOrder(
+        supabase,
+        openDeal,
+        selected,
+        boundLead.state ?? '',
+        answers
+      )
     }
   }
 
@@ -380,16 +485,11 @@ export async function POST(req: Request): Promise<Response> {
   if (dealError || !dealRow) {
     if (dealError?.code === UNIQUE_VIOLATION) {
       // Race lost OR a prior attempt left a stuck open order: an open order
-      // already exists for this contact + form.
+      // already exists for this contact + form. Return/resume it when the
+      // selection matches, or replace it when this submission changed the cart.
       const openDeal = await findOpenOrder(supabase, contact.id, form.id)
-      if (openDeal?.url) {
-        // Winner already linked it — return that link.
-        return NextResponse.json({ success: true, payment_link: openDeal.url })
-      }
       if (openDeal) {
-        // Order exists but was never linked (prior outage) — resume its on-enter
-        // actions instead of permanently 500-ing this contact+form.
-        return resumeOpenDeal(supabase, openDeal.id, answers)
+        return handleOpenOrder(supabase, openDeal, selected, customerState, answers)
       }
     }
     return fail('Could not create your enrollment. Please try again.', 500)
