@@ -16,13 +16,14 @@ describe('formatItemsNote', () => {
     )
   })
 
-  it('truncates with an ellipsis past the note length cap', () => {
+  it('truncates to <=255 UTF-8 bytes (not chars) so multi-byte ₹/… never overflow', () => {
+    // Long names full of multi-byte ₹ symbols — a char-based cap would overflow.
     const many = Array.from({ length: 40 }, (_, i) => ({
-      product_name: `Product ${i}`,
-      total_amount: 1000,
+      product_name: `Product number ${i} with a long name`,
+      total_amount: 123456.78,
     }))
     const note = formatItemsNote(many)
-    expect(note.length).toBeLessThanOrEqual(250)
+    expect(Buffer.byteLength(note, 'utf8')).toBeLessThanOrEqual(255)
     expect(note.endsWith('…')).toBe(true)
   })
 })
