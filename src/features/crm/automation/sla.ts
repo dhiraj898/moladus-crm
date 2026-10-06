@@ -194,6 +194,7 @@ async function dispatchSendWhatsApp(supabase: Supa, rule: SlaRule, deal: Deal): 
     dealId: deal.id,
     template,
     whatsapp: contact.whatsapp_number,
+    name,
     params: resolveTemplateParams(tokens, {
       name,
       paymentLink,
