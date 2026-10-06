@@ -30,6 +30,8 @@ export type ActionResult<T> =
 
 /** Postgres unique-violation error code. */
 const UNIQUE_VIOLATION = '23505'
+/** Postgres foreign-key-violation error code. */
+const FK_VIOLATION = '23503'
 
 /** Fetch every product, newest first. */
 export async function listProducts(): Promise<Product[]> {
@@ -175,6 +177,34 @@ export async function updateProduct(
   revalidatePath('/admin/products')
   revalidatePath(`/admin/products/${id}`)
   return { ok: true, data: data as Product }
+}
+
+/**
+ * Permanently delete a product. No `product_id` FK cascades, so a product that
+ * is still referenced by a form, lead, or order is blocked by the database
+ * (23503) rather than silently orphaning those rows — we surface that as a
+ * friendly message pointing to deactivation instead.
+ */
+export async function deleteProduct(id: string): Promise<ActionResult<void>> {
+  const gate = await requirePermission('products', 'edit')
+  if (!gate.ok) return { ok: false, error: gate.error }
+
+  const supabase = getServiceClient()
+  const { error } = await supabase.from('products').delete().eq('id', id)
+
+  if (error) {
+    if (error.code === FK_VIOLATION) {
+      return {
+        ok: false,
+        error:
+          'This product is still used by a form, lead, or order, so it cannot be deleted. Deactivate it instead.',
+      }
+    }
+    return { ok: false, error: `Failed to delete product: ${error.message}` }
+  }
+
+  revalidatePath('/admin/products')
+  return { ok: true, data: undefined }
 }
 
 /** Toggle a product's active flag (soft enable/disable). */

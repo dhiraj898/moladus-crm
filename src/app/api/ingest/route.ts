@@ -1,12 +1,10 @@
 import { NextResponse } from 'next/server'
 import type { AnswersMap } from '@/features/form-engine/visibility'
 import type { Contact, Deal, Json, Lead } from '@/lib/supabase/types'
-import { getEnv } from '@/lib/env'
 import { getServiceClient } from '@/lib/supabase/server'
 import { getFormWithFields } from '@/features/forms/queries'
 import { applyBindings, validateAnswers } from '@/features/ingest/bind'
 import { checkRateLimit } from '@/features/ingest/rateLimit'
-import { verifyCaptcha } from '@/features/ingest/captcha'
 import { buildOrderItems } from '@/features/crm/deals/orderItems'
 import { resolveEntryStage } from '@/features/crm/automation/entry'
 import { runStageActions } from '@/features/crm/automation/runActions'
@@ -17,9 +15,9 @@ import { emitEvent } from '@/features/webhooks/emit'
 /**
  * Public submission pipeline (spec §6, steps 1–14).
  *
- * `POST /api/ingest` accepts `{ form_id, answers, selected_products,
- * captcha_token }` (optionally `utm`) from the public FormRunner and drives the
- * full enrollment flow: rate limit → captcha → server-side visibility +
+ * `POST /api/ingest` accepts `{ form_id, answers, selected_products }`
+ * (optionally `utm`) from the public FormRunner and drives the
+ * full enrollment flow: rate limit → server-side visibility +
  * validation → bind → dedupe → persist (contact/lead + one multi-line order:
  * deal + deal_items with aggregated GST) → Razorpay payment link → AiSensy
  * WhatsApp → `{ success, payment_link }`.
@@ -34,8 +32,7 @@ import { emitEvent } from '@/features/webhooks/emit'
  * Node runtime is required: the Razorpay SDK + downstream `node:crypto` are not
  * edge-compatible.
  *
- * ENV-PENDING: the end-to-end flow needs live Supabase, Razorpay, Altcha
- * (`ALTCHA_HMAC_KEY` + `NEXT_PUBLIC_CAPTCHA_ENABLED=true`), and AiSensy
+ * ENV-PENDING: the end-to-end flow needs live Supabase, Razorpay, and AiSensy
  * credentials. Manual test once keys exist is documented at the bottom of this
  * file.
  */
@@ -47,7 +44,6 @@ const UNIQUE_VIOLATION = '23505'
 interface IngestBody {
   form_id?: unknown
   answers?: unknown
-  captcha_token?: unknown
   utm?: unknown
   selected_products?: unknown
 }
@@ -198,7 +194,7 @@ export async function POST(req: Request): Promise<Response> {
     return fail('Too many requests. Please wait a minute and try again.', 429)
   }
 
-  // Parse body (Step 1: parse form_id + answers + captcha_token).
+  // Parse body (Step 1: parse form_id + answers).
   let body: IngestBody
   try {
     body = (await req.json()) as IngestBody
@@ -207,7 +203,6 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   const formId = typeof body.form_id === 'string' ? body.form_id : null
-  const captchaToken = typeof body.captcha_token === 'string' ? body.captcha_token : null
   const answers: AnswersMap =
     body.answers && typeof body.answers === 'object' && !Array.isArray(body.answers)
       ? (body.answers as AnswersMap)
@@ -226,16 +221,7 @@ export async function POST(req: Request): Promise<Response> {
     return fail('Missing form_id.', 400)
   }
 
-  // 2. CAPTCHA verify (400 on fail). Only enforced when CAPTCHA is enabled.
-  const env = getEnv()
-  if (env.NEXT_PUBLIC_CAPTCHA_ENABLED === 'true') {
-    const captchaOk = await verifyCaptcha(captchaToken)
-    if (!captchaOk) {
-      return fail('Captcha verification failed. Please try again.', 400)
-    }
-  }
-
-  // 3. Load form + fields + product; validate.
+  // 2. Load form + fields + product; validate.
   const loaded = await getFormWithFields(formId)
   if (!loaded || loaded.form.status !== 'published') {
     return fail('This form is not available.', 404)
@@ -473,9 +459,9 @@ export async function POST(req: Request): Promise<Response> {
 
 /*
  * ENV-PENDING — end-to-end manual test (needs live Supabase + Razorpay +
- * Altcha + AiSensy):
+ * AiSensy):
  *   1. Publish a multi-product form; open `/f/<slug>`, select 2 offered items,
- *      let the Altcha widget solve, and submit. Expect a redirect to ONE
+ *      and submit. Expect a redirect to ONE
  *      Razorpay hosted payment link for the combined total.
  *   2. In Supabase: a `leads` row (raw_payload/utm/state; product_id null), a
  *      `contacts` row (consent + consent_timestamp set iff the consent field was
@@ -486,6 +472,6 @@ export async function POST(req: Request): Promise<Response> {
  *   3. A `notification_log` row for template 'enrollment_link'.
  *   4. Resubmit the same WhatsApp + form before paying → the SAME payment link
  *      is returned (idempotency), no duplicate order.
- *   5. Omit/tamper the captcha token → 400; exceed 5 submits/min from one IP →
- *      429; submit with no items selected → 400.
+ *   5. Exceed 5 submits/min from one IP → 429; submit with no items selected →
+ *      400.
  */

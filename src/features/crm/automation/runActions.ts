@@ -4,7 +4,7 @@ import { getServiceClient } from '@/lib/supabase/server'
 import { createPaymentLink } from '@/features/razorpay/paymentLink'
 import { sendWhatsAppTemplate } from '@/features/aisensy/send'
 import { logActivity } from '@/features/crm/activities/service'
-import { loadLineSummary } from './orderSummary'
+import { loadLineSummary, loadOrderDetail } from './orderSummary'
 import type { Contact, Deal, StageAction } from '@/lib/supabase/types'
 
 /**
@@ -166,10 +166,12 @@ async function runCreatePaymentLink(dealId: string): Promise<void> {
   }
 
   // Order-level: a multi-line order has `product_id` null (one row per
-  // `deal_items`). The link description summarises the line(s); legacy
-  // single-product deals keep the single product's name. The amount is the
-  // deal's GST-inclusive `total_amount` either way.
-  const description = await loadLineSummary(dealId, deal.product_id)
+  // `deal_items`). Razorpay gets the FULL item list — every product name in the
+  // description, and an itemized "name ₹total" breakdown plus the order total in
+  // `notes` — so the payer sees exactly what they are paying for. Legacy
+  // single-product deals resolve to that one product. The amount is the deal's
+  // GST-inclusive `total_amount` either way.
+  const { description, itemsNote } = await loadOrderDetail(dealId, deal.product_id)
 
   const callbackUrl = await resolveCallbackUrl(deal.lead_id)
 
@@ -183,7 +185,12 @@ async function runCreatePaymentLink(dealId: string): Promise<void> {
     },
     callbackUrl,
     referenceId: dealId,
-    notes: { deal_id: dealId, product_id: deal.product_id ?? '' },
+    notes: {
+      deal_id: dealId,
+      product_id: deal.product_id ?? '',
+      items: itemsNote,
+      order_total: Number(deal.total_amount),
+    },
   })
 
   await supabase
@@ -256,7 +263,7 @@ async function runSendWhatsApp(dealId: string, action: StageAction): Promise<voi
 }
 
 /** Sentinel placed in the paymentLink slot to probe a template's param shape. */
-const PAYMENT_LINK_PROBE = ' __payment_link_probe__'
+const PAYMENT_LINK_PROBE = '\0__payment_link_probe__'
 
 /**
  * Whether a template's param list actually carries the payment link, and would

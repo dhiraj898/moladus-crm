@@ -1,6 +1,5 @@
 'use client'
 
-import 'altcha'
 import {
   useCallback,
   useEffect,
@@ -20,9 +19,8 @@ import type { Answer } from '@/features/form-engine/visibility'
  * - Enter advances; Backspace on an empty field goes back; Back button.
  * - Statement + Yes/No fields auto-advance.
  * - Conditional navigation: hidden fields are skipped (via `useFormNav`).
- * - Altcha proof-of-work widget on the final step; POSTs `{ form_id, answers,
- *   captcha_token }` to the ingest endpoint and redirects to the returned
- *   payment link.
+ * - POSTs `{ form_id, answers, selected_products }` to the ingest endpoint and
+ *   redirects to the returned payment link.
  *
  * Field definitions arrive fully rendered from the server — this component
  * never fetches config from the browser.
@@ -46,7 +44,6 @@ interface FormRunnerProps {
   fields: FormField[]
   welcomeMessage: string | null
   submitLabel: string
-  captchaEnabled: boolean
   ingestUrl: string
   products: ProductOffering[]
   hidePrice: boolean
@@ -67,7 +64,6 @@ export default function FormRunner({
   fields,
   welcomeMessage,
   submitLabel,
-  captchaEnabled,
   ingestUrl,
   products,
   hidePrice,
@@ -97,10 +93,8 @@ export default function FormRunner({
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [confirmed, setConfirmed] = useState(false)
-  const [captchaToken, setCaptchaToken] = useState<string | null>(null)
 
   const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null)
-  const captchaRef = useRef<HTMLDivElement | null>(null)
 
   // Clear the transient field error whenever the field changes.
   useEffect(() => {
@@ -111,31 +105,6 @@ export default function FormRunner({
   useEffect(() => {
     inputRef.current?.focus()
   }, [currentIndex])
-
-  // ---- Altcha proof-of-work (final step only) --------------------------
-  const captchaRequired = captchaEnabled
-
-  // The `altcha` custom element (registered by `import 'altcha'`) fetches a
-  // challenge from `challengeurl`, solves it in a worker, and emits a bubbling
-  // `statechange` event carrying the base64 solution `payload` once verified.
-  // We capture that payload into `captchaToken` (and clear it on any non-
-  // verified state) so submit can gate on it and POST it as `captcha_token`.
-  useEffect(() => {
-    const container = captchaRef.current
-    if (!isLast || !captchaRequired || !container) return
-
-    const onStateChange = (event: Event) => {
-      const detail = (
-        event as CustomEvent<{ payload?: string; state?: string }>
-      ).detail
-      setCaptchaToken(
-        detail?.state === 'verified' && detail.payload ? detail.payload : null
-      )
-    }
-
-    container.addEventListener('statechange', onStateChange)
-    return () => container.removeEventListener('statechange', onStateChange)
-  }, [isLast, captchaRequired])
 
   // ---- validation ------------------------------------------------------
   const validateCurrent = useCallback((): boolean => {
@@ -162,10 +131,6 @@ export default function FormRunner({
   // ---- submission ------------------------------------------------------
   const submit = useCallback(async () => {
     if (!validateCurrent()) return
-    if (captchaRequired && !captchaToken) {
-      setSubmitError('Please complete the verification challenge.')
-      return
-    }
     setSubmitError(null)
     setSubmitting(true)
     try {
@@ -175,7 +140,6 @@ export default function FormRunner({
         body: JSON.stringify({
           form_id: formId,
           answers,
-          captcha_token: captchaToken,
           selected_products: selectedIds,
         }),
       })
@@ -191,11 +155,6 @@ export default function FormRunner({
             'Something went wrong submitting your enrollment. Please try again.'
         )
         setSubmitting(false)
-        if (captchaRequired) {
-          // Re-arm the widget so the used solution isn't replayed on retry.
-          captchaRef.current?.querySelector('altcha-widget')?.reset()
-          setCaptchaToken(null)
-        }
         return
       }
       if (typeof data.payment_link === 'string' && data.payment_link.length > 0) {
@@ -213,8 +172,6 @@ export default function FormRunner({
     }
   }, [
     validateCurrent,
-    captchaRequired,
-    captchaToken,
     ingestUrl,
     formId,
     answers,
@@ -348,16 +305,6 @@ export default function FormRunner({
             </p>
           ) : null}
 
-          {/* Altcha proof-of-work widget on the final step */}
-          {isLast && captchaRequired ? (
-            <div ref={captchaRef} className="mt-6">
-              <altcha-widget
-                challengeurl="/api/altcha/challenge"
-                name="captcha_token"
-                theme="dark"
-              />
-            </div>
-          ) : null}
 
           {submitError ? (
             <p className="mt-4 text-sm text-red" role="alert">
