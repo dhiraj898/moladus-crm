@@ -5,6 +5,12 @@ import { createPaymentLink } from '@/features/razorpay/paymentLink'
 import { sendWhatsAppTemplate } from '@/features/aisensy/send'
 import { logActivity } from '@/features/crm/activities/service'
 import { loadLineSummary, loadOrderDetail } from './orderSummary'
+import {
+  paramTokensFromConfig,
+  resolveTemplateParams,
+  tokensNeedPaymentLink,
+} from './templateParams'
+import { formatMoney } from '@/features/form-engine/estimate'
 import type { Contact, Deal, StageAction } from '@/lib/supabase/types'
 
 /**
@@ -239,6 +245,13 @@ async function runSendWhatsApp(dealId: string, action: StageAction): Promise<voi
   const name = contact.name ?? 'there'
   const paymentLink = deal?.razorpay_payment_link_url ?? ''
   const productName = await loadLineSummary(dealId, deal?.product_id ?? null)
+  const amount = deal ? formatMoney(Number(deal.total_amount)) : ''
+  const email = contact.email ?? ''
+
+  // Which params this template's config declares (falls back to the default
+  // order). AiSensy rejects (400) a send whose param count differs from the
+  // approved campaign's variables, so the config is the source of truth.
+  const tokens = paramTokensFromConfig(action.config)
 
   // Link-dependent templates carry the payment link as a param. If the link is
   // missing (e.g. an earlier `create_payment_link` action failed on a Razorpay
@@ -246,7 +259,7 @@ async function runSendWhatsApp(dealId: string, action: StageAction): Promise<voi
   // failure), dispatching would send a message with a BLANK link. Skip and log
   // instead, so a real student never receives a broken enrollment WhatsApp. The
   // deal stays open+unlinked and is resumable on a later submission.
-  if (templateNeedsPaymentLink(template) && !paymentLink) {
+  if (tokensNeedPaymentLink(tokens) && !paymentLink) {
     await logActivity('deal', dealId, 'notification', {
       body: `On-enter send_whatsapp (${template}) skipped: payment link not available.`,
       metadata: { status: 'action_failed', action_type: 'send_whatsapp' },
@@ -258,46 +271,13 @@ async function runSendWhatsApp(dealId: string, action: StageAction): Promise<voi
     dealId,
     template,
     whatsapp: contact.whatsapp_number,
-    params: buildTemplateParams(template, { name, paymentLink, productName }),
+    params: resolveTemplateParams(tokens, {
+      name,
+      paymentLink,
+      productName,
+      amount,
+      email,
+    }),
   })
 }
 
-/** Sentinel placed in the paymentLink slot to probe a template's param shape. */
-const PAYMENT_LINK_PROBE = '\0__payment_link_probe__'
-
-/**
- * Whether a template's param list actually carries the payment link, and would
- * therefore send a broken message if the link were empty. Derived from
- * `buildTemplateParams` itself (the single source of truth) by probing with a
- * sentinel link and checking whether it survives into the params — so a
- * newly-added link-free template case is skipped ONLY if it genuinely omits the
- * link, not because it happens not to be `enrollment_receipt`. A template whose
- * params do not include the link sends even when the deal has no link.
- */
-function templateNeedsPaymentLink(template: string): boolean {
-  return buildTemplateParams(template, {
-    name: '',
-    paymentLink: PAYMENT_LINK_PROBE,
-    productName: '',
-  }).includes(PAYMENT_LINK_PROBE)
-}
-
-/**
- * Map a template name to its ordered AiSensy `templateParams`. Known templates
- * mirror the typed wrappers in `aisensy/send.ts`; unknown templates get a
- * best-effort superset so a newly-configured template still receives useful
- * params without a code change.
- */
-function buildTemplateParams(
-  template: string,
-  ctx: { name: string; paymentLink: string; productName: string }
-): string[] {
-  switch (template) {
-    case 'enrollment_link':
-      return [ctx.name, ctx.paymentLink]
-    case 'enrollment_receipt':
-      return [ctx.name, ctx.productName]
-    default:
-      return [ctx.name, ctx.paymentLink, ctx.productName]
-  }
-}

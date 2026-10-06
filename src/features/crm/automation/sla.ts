@@ -5,6 +5,8 @@ import { moveDealStageAsSystem } from './moveStage'
 import { sendWhatsAppTemplate } from '@/features/aisensy/send'
 import { logActivity } from '@/features/crm/activities/service'
 import { loadLineSummary } from './orderSummary'
+import { paramTokensFromConfig, resolveTemplateParams } from './templateParams'
+import { formatMoney } from '@/features/form-engine/estimate'
 import type { Contact, Deal, SlaRule } from '@/lib/supabase/types'
 
 /**
@@ -181,12 +183,24 @@ async function dispatchSendWhatsApp(supabase: Supa, rule: SlaRule, deal: Deal): 
   // Order-level summary: joins `deal_items` for multi-line orders (product_id
   // null) and falls back to the single product's name for legacy deals.
   const productName = await loadLineSummary(deal.id, deal.product_id)
+  const amount = formatMoney(Number(deal.total_amount))
+  const email = contact.email ?? ''
+
+  // Config-declared param order (falls back to the default) so a reminder
+  // template's variable count matches its approved AiSensy campaign.
+  const tokens = paramTokensFromConfig(rule.config)
 
   await sendWhatsAppTemplate({
     dealId: deal.id,
     template,
     whatsapp: contact.whatsapp_number,
-    params: [name, paymentLink, productName],
+    params: resolveTemplateParams(tokens, {
+      name,
+      paymentLink,
+      productName,
+      amount,
+      email,
+    }),
   })
 }
 
@@ -214,12 +228,12 @@ async function dispatchMoveStage(_supabase: Supa, rule: SlaRule, deal: Deal): Pr
 async function loadContact(
   supabase: Supa,
   contactId: string | null
-): Promise<Pick<Contact, 'name' | 'whatsapp_number'> | null> {
+): Promise<Pick<Contact, 'name' | 'whatsapp_number' | 'email'> | null> {
   if (!contactId) return null
   const { data } = await supabase
     .from('contacts')
-    .select('name, whatsapp_number')
+    .select('name, whatsapp_number, email')
     .eq('id', contactId)
     .maybeSingle()
-  return (data as Pick<Contact, 'name' | 'whatsapp_number'> | null) ?? null
+  return (data as Pick<Contact, 'name' | 'whatsapp_number' | 'email'> | null) ?? null
 }
