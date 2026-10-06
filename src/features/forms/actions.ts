@@ -206,6 +206,40 @@ export async function unpublishForm(id: string): Promise<ActionResult<Form>> {
 }
 
 /**
+ * Permanently delete a form — only when it is safe to. A form referenced by a
+ * `leads` or `deals` row is part of the enrollment history, so deleting it
+ * would orphan submissions/orders; those are blocked with a message pointing to
+ * unpublish instead. `form_fields` and `form_products` cascade on delete.
+ */
+export async function deleteForm(id: string): Promise<ActionResult<void>> {
+  const gate = await requirePermission('forms', 'edit')
+  if (!gate.ok) return { ok: false, error: gate.error }
+
+  const supabase = getServiceClient()
+
+  for (const table of ['leads', 'deals'] as const) {
+    const { count, error } = await supabase
+      .from(table)
+      .select('id', { count: 'exact', head: true })
+      .eq('form_id', id)
+    if (error) return { ok: false, error: `Failed to check ${table}: ${error.message}` }
+    if ((count ?? 0) > 0) {
+      return {
+        ok: false,
+        error:
+          'This form has submissions or orders, so it cannot be deleted. Unpublish it instead.',
+      }
+    }
+  }
+
+  const { error } = await supabase.from('forms').delete().eq('id', id)
+  if (error) return { ok: false, error: `Failed to delete form: ${error.message}` }
+
+  revalidatePath('/admin/forms')
+  return { ok: true, data: undefined }
+}
+
+/**
  * Replace the full set of products a form offers (spec §4 — multi-product
  * forms). The join rows for the form are deleted and re-inserted with a
  * sequential `display_order` matching the given id order, so ordering is

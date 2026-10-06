@@ -5,7 +5,9 @@ import {
   listFormProductIds,
 } from '@/features/forms/queries'
 import { listProducts } from '@/features/products/actions'
+import { deleteForm } from '@/features/forms/actions'
 import type { Product } from '@/lib/supabase/types'
+import DeleteButton from '@/components/DeleteButton'
 import FormMetaForm from '@/features/forms/FormMetaForm'
 import FormProductsPicker from '@/features/forms/FormProductsPicker'
 import FieldConfigurator from '@/features/forms/FieldConfigurator'
@@ -98,6 +100,20 @@ export default async function FormBuilderPage({
 
       <section>
         <FieldConfigurator form={form} initialFields={fields} />
+      </section>
+
+      <section className="mt-12 border-t border-line pt-8">
+        <h2 className="mb-1 text-lg font-bold tracking-[-0.01em]">Danger zone</h2>
+        <p className="mb-4 max-w-[640px] text-sm text-dim">
+          Permanently delete this form. Blocked if it has submissions or orders
+          — unpublish it instead.
+        </p>
+        <DeleteButton
+          action={deleteForm.bind(null, form.id)}
+          redirectTo="/admin/forms"
+          confirm={`Delete "${form.name}"? This cannot be undone.`}
+          label="Delete form"
+        />
       </section>
     </div>
   )
