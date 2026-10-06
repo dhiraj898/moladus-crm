@@ -43,6 +43,7 @@ const SECRET_LABELS: Record<SecretKey, string> = {
   RAZORPAY_WEBHOOK_SECRET: 'Webhook Signing Secret',
   AISENSY_API_KEY: 'API Key',
   AISENSY_WEBHOOK_SECRET: 'Webhook Signing Secret',
+  AISENSY_USER_NAME: 'User Name (API sender)',
 }
 
 /** Per-provider configuration driving the two cards. */
@@ -76,7 +77,7 @@ const PROVIDERS: Provider[] = [
     name: 'AiSensy',
     blurb:
       'WhatsApp campaign API and its inbound message webhook. Set here to override the environment; leave blank to keep the env fallback.',
-    credentials: ['AISENSY_API_KEY'],
+    credentials: ['AISENSY_API_KEY', 'AISENSY_USER_NAME'],
     webhookPath: '/api/webhooks/aisensy',
     webhookSecret: 'AISENSY_WEBHOOK_SECRET',
     test: testAiSensy,

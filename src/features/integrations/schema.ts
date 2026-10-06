@@ -16,6 +16,7 @@ export const secretInputSchema = z.object({
     'RAZORPAY_WEBHOOK_SECRET',
     'AISENSY_API_KEY',
     'AISENSY_WEBHOOK_SECRET',
+    'AISENSY_USER_NAME',
   ]),
   value: z.string().min(1, 'Value is required'),
 })
