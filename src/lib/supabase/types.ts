@@ -516,3 +516,71 @@ export interface WebhookDelivery {
   error: string | null
   created_at: string
 }
+
+// ---------------------------------------------------------------------------
+// Dashboard views (migration 0012 — hand-authored; views aren't emitted by
+// `supabase gen types` without extra config). `day` is a date_trunc timestamptz
+// returned as an ISO string; numeric aggregates follow the gen-types convention
+// of `number`.
+// ---------------------------------------------------------------------------
+
+/** Revenue bucket derived from payment_status (paid vs booked-but-unpaid). */
+export type RevenueBucket = 'paid' | 'pending'
+
+export interface RevenueDailyRow {
+  day: string
+  bucket: RevenueBucket
+  total_amount: number
+  gst: number
+}
+
+export interface RevenueByProductRow {
+  day: string
+  product_name: string
+  bucket: RevenueBucket
+  total_amount: number
+}
+
+export interface LeadsDailyRow {
+  day: string
+  count: number
+}
+
+export interface LeadsBySourceRow {
+  day: string
+  source: string
+  count: number
+}
+
+export interface LeadsByFormRow {
+  day: string
+  form_name: string
+  count: number
+}
+
+export interface LeadConversionRow {
+  day: string
+  leads: number
+  leads_with_deal: number
+}
+
+export interface PipelineByStageRow {
+  stage: string
+  type: StageType
+  display_order: number
+  count: number
+  total_amount: number
+}
+
+export interface StageVelocityRow {
+  stage: string
+  avg_days_in_stage: number
+}
+
+export interface StaleDealRow {
+  deal_id: string
+  stage: string
+  total_amount: number
+  stage_entered_at: string
+  days_stale: number
+}
