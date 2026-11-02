@@ -35,6 +35,7 @@ async function sendTemplate(
   template: string,
   whatsapp: string,
   params: string[],
+  name: string,
 ): Promise<{ ok: boolean; error?: string }> {
   try {
     // Resolve the API key via the secret store (DB override, then env). Fail
@@ -44,12 +45,11 @@ async function sendTemplate(
     if (!apiKey) {
       return { ok: false, error: 'AiSensy API key not configured' }
     }
-    // AiSensy's campaign API REQUIRES `userName` (the account's WhatsApp
-    // display/user name). Omitting it returns 400 "Invalid userName format".
-    const userName = await getSecret('AISENSY_USER_NAME')
-    if (!userName) {
-      return { ok: false, error: 'AiSensy userName not configured' }
-    }
+    // AiSensy's `userName` is the RECIPIENT's display name (it becomes the
+    // contact's name in AiSensy), and it is required — omitting it returns 400
+    // "Invalid userName format". So it must be the contact's own name, never a
+    // fixed account value.
+    const userName = name.trim() || 'Student'
     const res = await fetch(AISENSY_ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -113,8 +113,15 @@ export async function sendWhatsAppTemplate(input: {
   template: string
   whatsapp: string
   params: string[]
+  /** Recipient's display name — sent as AiSensy `userName` (the contact's name). */
+  name: string
 }): Promise<SendResult> {
-  const { ok, error } = await sendTemplate(input.template, input.whatsapp, input.params)
+  const { ok, error } = await sendTemplate(
+    input.template,
+    input.whatsapp,
+    input.params,
+    input.name,
+  )
   await logNotification(input.dealId, input.template, ok, error)
   return { ok }
 }

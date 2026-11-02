@@ -271,6 +271,7 @@ async function runSendWhatsApp(dealId: string, action: StageAction): Promise<voi
     dealId,
     template,
     whatsapp: contact.whatsapp_number,
+    name,
     params: resolveTemplateParams(tokens, {
       name,
       paymentLink,
