@@ -17,8 +17,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const SECRET = 'whsec_test_aisensy'
 
-const { envState } = vi.hoisted(() => ({
+const { envState, moveDealStageMock } = vi.hoisted(() => ({
   envState: { AISENSY_WEBHOOK_SECRET: undefined as string | undefined },
+  moveDealStageMock: vi.fn(async (): Promise<void> => {}),
 }))
 
 // Chainable supabase mock: contacts.select(...).eq(...).order(...).limit(...).maybeSingle()
@@ -31,11 +32,28 @@ const upsertMock = vi.fn(
     _opts: Record<string, unknown>,
   ): Promise<{ error: unknown }> => ({ error: null }),
 )
-
+// "Call Requested" button-tap path: stage lookup, open-deal lookup, system move.
+const stageMaybeSingleMock = vi.fn(async (): Promise<{ data: { id: string } | null }> => ({
+  data: { id: 'stage-cr' },
+}))
+const dealMaybeSingleMock = vi.fn(
+  async (): Promise<{ data: { id: string; stage_id: string | null } | null }> => ({
+    data: { id: 'deal-1', stage_id: 'stage-old' },
+  }),
+)
 function makeClient() {
   return {
     from: vi.fn((table: string) => {
       if (table === 'messages') return { upsert: upsertMock }
+      if (table === 'stages') return { select: () => ({ eq: () => ({ maybeSingle: stageMaybeSingleMock }) }) }
+      if (table === 'deals')
+        return {
+          select: () => ({
+            eq: () => ({
+              not: () => ({ order: () => ({ limit: () => ({ maybeSingle: dealMaybeSingleMock }) }) }),
+            }),
+          }),
+        }
       // contacts lookup
       return {
         select: () => ({
@@ -53,6 +71,9 @@ vi.mock('@/features/integrations/secrets', () => ({
 }))
 vi.mock('@/lib/supabase/server', () => ({
   getServiceClient: () => makeClient(),
+}))
+vi.mock('@/features/crm/automation/moveStage', () => ({
+  moveDealStageAsSystem: moveDealStageMock,
 }))
 
 import { POST } from './route'
@@ -88,7 +109,24 @@ beforeEach(() => {
   envState.AISENSY_WEBHOOK_SECRET = SECRET
   maybeSingleMock.mockResolvedValue({ data: { id: 'contact-1' } })
   upsertMock.mockResolvedValue({ error: null })
+  stageMaybeSingleMock.mockResolvedValue({ data: { id: 'stage-cr' } })
+  dealMaybeSingleMock.mockResolvedValue({ data: { id: 'deal-1', stage_id: 'stage-old' } })
 })
+
+function callRequested(overrides: Record<string, unknown> = {}): string {
+  return JSON.stringify({
+    topic: 'message.sender.user',
+    data: {
+      id: 'msg_cr',
+      sender: 'USER',
+      message_type: 'button',
+      body: 'Call Requested',
+      phone_number: '919812345678',
+      sent_at: '2026-08-22T10:00:00Z',
+      ...overrides,
+    },
+  })
+}
 
 describe('POST /api/webhooks/aisensy', () => {
   it('503s when AISENSY_WEBHOOK_SECRET is unset and never touches the DB', async () => {
@@ -171,6 +209,38 @@ describe('POST /api/webhooks/aisensy', () => {
     const res = await POST(req(inbound, sign(inbound)))
     expect(res.status).toBe(500)
     await expect(res.json()).resolves.toEqual({ error: 'storage error' })
+  })
+
+  it('moves the contact\'s open deal to "Call Requested" on a button tap', async () => {
+    const body = callRequested()
+    const res = await POST(req(body, sign(body)))
+    expect(res.status).toBe(200)
+    expect(moveDealStageMock).toHaveBeenCalledWith('deal-1', 'stage-cr', {
+      via: 'whatsapp',
+      fromStageId: 'stage-old',
+    })
+  })
+
+  it('does not move a deal for an ordinary inbound message', async () => {
+    const res = await POST(req(inbound, sign(inbound)))
+    expect(res.status).toBe(200)
+    expect(moveDealStageMock).not.toHaveBeenCalled()
+  })
+
+  it('does not move when the deal is already in the "Call Requested" stage', async () => {
+    dealMaybeSingleMock.mockResolvedValue({ data: { id: 'deal-1', stage_id: 'stage-cr' } })
+    const body = callRequested()
+    const res = await POST(req(body, sign(body)))
+    expect(res.status).toBe(200)
+    expect(moveDealStageMock).not.toHaveBeenCalled()
+  })
+
+  it('still 200s when the button tap matches no open deal', async () => {
+    dealMaybeSingleMock.mockResolvedValue({ data: null })
+    const body = callRequested()
+    const res = await POST(req(body, sign(body)))
+    expect(res.status).toBe(200)
+    expect(moveDealStageMock).not.toHaveBeenCalled()
   })
 
   it('synthesizes a deterministic id when the provider omits one', async () => {

@@ -3,7 +3,11 @@ import crypto from 'node:crypto'
 import { getSecret } from '@/features/integrations/secrets'
 import { getServiceClient } from '@/lib/supabase/server'
 import { verifyAiSensySignature } from '@/features/aisensy/verify'
+import { moveDealStageAsSystem } from '@/features/crm/automation/moveStage'
 import type { MessageDirection } from '@/lib/supabase/types'
+
+/** Inbound button label that advances a deal to the matching stage. */
+const CALL_REQUESTED_STAGE = 'Call Requested'
 
 /**
  * AiSensy Project-API inbound webhook (Spec 6 design §5).
@@ -43,6 +47,39 @@ interface AiSensyWebhookBody {
   topic?: string
   data?: AiSensyMessageData
   message?: AiSensyMessageData
+}
+
+/**
+ * Advance the contact's most recent open deal to the "Call Requested" stage when
+ * they tap that WhatsApp button. Mirrors the Razorpay webhook: a NULL-actor
+ * system move (audit row + on-enter actions), scoped to non-terminal deals so a
+ * paid/refunded order is never reopened. No stage, no deal, or an already-there
+ * deal → no-op.
+ */
+async function moveDealToCallRequested(
+  supabase: ReturnType<typeof getServiceClient>,
+  contactId: string,
+): Promise<void> {
+  const { data: stage } = await supabase
+    .from('stages')
+    .select('id')
+    .eq('name', CALL_REQUESTED_STAGE)
+    .maybeSingle()
+  const stageId = (stage as { id: string } | null)?.id
+  if (!stageId) return
+
+  const { data: deal } = await supabase
+    .from('deals')
+    .select('id, stage_id')
+    .eq('contact_id', contactId)
+    .not('payment_status', 'in', '("paid","refunded","failed")')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  const d = deal as { id: string; stage_id: string | null } | null
+  if (!d || d.stage_id === stageId) return
+
+  await moveDealStageAsSystem(d.id, stageId, { via: 'whatsapp', fromStageId: d.stage_id })
 }
 
 export async function POST(req: Request): Promise<Response> {
@@ -121,6 +158,21 @@ export async function POST(req: Request): Promise<Response> {
 
   if (error) {
     return NextResponse.json({ error: 'storage error' }, { status: 500 })
+  }
+
+  // 4b. A customer "Call Requested" button tap advances their open deal to the
+  // matching stage. Best-effort: the message is already stored, so any failure
+  // here is swallowed to protect the 200 ack (and AiSensy's retry suppression).
+  if (
+    direction === 'inbound' &&
+    contactId &&
+    messageBody?.trim().toLowerCase() === CALL_REQUESTED_STAGE.toLowerCase()
+  ) {
+    try {
+      await moveDealToCallRequested(supabase, contactId)
+    } catch {
+      // Swallow: moving the deal is best-effort and must not fail the webhook.
+    }
   }
 
   // 5. Ack.
