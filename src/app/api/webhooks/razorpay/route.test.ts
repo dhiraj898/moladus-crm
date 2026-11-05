@@ -193,6 +193,35 @@ describe('POST /api/webhooks/razorpay (plan Task 1.2)', () => {
     expect(sendWhatsAppTemplateMock).not.toHaveBeenCalled()
   })
 
+  it('includes the buyer on deal.paid so a subscriber can act on it', async () => {
+    // Without these a receiver gets an opaque dealId and no way to resolve it:
+    // there is no read API for deals.
+    db.deal = {
+      id: 'deal-1',
+      total_amount: '1000.00',
+      contact: { name: 'Ada Lovelace', email: 'ada@example.com', whatsapp_number: '+919876543210' },
+    }
+    await POST(makeReq(paidBody))
+    expect(emitEventMock).toHaveBeenCalledWith(
+      'deal.paid',
+      expect.objectContaining({
+        dealId: 'deal-1',
+        email: 'ada@example.com',
+        name: 'Ada Lovelace',
+        phone: '+919876543210',
+      })
+    )
+  })
+
+  it('emits deal.paid with null contact fields when the deal has no contact', async () => {
+    db.deal = { id: 'deal-1', total_amount: '1000.00', contact: null }
+    await POST(makeReq(paidBody))
+    expect(emitEventMock).toHaveBeenCalledWith(
+      'deal.paid',
+      expect.objectContaining({ dealId: 'deal-1', email: null, name: null, phone: null })
+    )
+  })
+
   it('does not move when the paid update is a no-op (no genuine transition)', async () => {
     db.transitioned = []
     const res = await POST(makeReq(paidBody))

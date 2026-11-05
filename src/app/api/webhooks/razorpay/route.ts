@@ -108,7 +108,7 @@ export async function POST(req: Request): Promise<Response> {
   if (newStatus && paymentLinkId) {
     const { data: deal } = await supabase
       .from('deals')
-      .select('id, total_amount')
+      .select('id, total_amount, contact:contacts (name, email, whatsapp_number)')
       .eq('razorpay_payment_link_id', paymentLinkId)
       .maybeSingle()
 
@@ -167,10 +167,18 @@ export async function POST(req: Request): Promise<Response> {
       // `deal.payment_failed`.
       if (transitioned && transitioned.length > 0) {
         if (newStatus === 'paid') {
+          // Supabase types an embedded relation as an array; normalise to one.
+          const contact = Array.isArray(deal.contact) ? deal.contact[0] : deal.contact
           await emitEvent('deal.paid', {
             dealId: deal.id,
             razorpay_ref: paymentRef ?? null,
             amount: Number(deal.total_amount),
+            // Subscribers need to know WHO paid. Without these a receiver gets
+            // an opaque dealId and no way to resolve it — there is no read API
+            // for deals — so the event cannot drive anything downstream.
+            email: contact?.email ?? null,
+            name: contact?.name ?? null,
+            phone: contact?.whatsapp_number ?? null,
           })
         } else {
           await emitEvent('deal.payment_failed', {
